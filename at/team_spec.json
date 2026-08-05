@@ -1,0 +1,78 @@
+{
+  "team_id": "mockmate-demo-team",
+  "team_name": "MockMate 面试官联盟",
+  "scenario_id": "backend_intern",
+  "team_leader": {
+    "name": "mockmate-leader",
+    "type": "independent_teamleader",
+    "generated_by": "manager_at_team_creation",
+    "responsibilities": [
+      "task_decomposition",
+      "context_routing_between_workers",
+      "state_management",
+      "final_synthesis"
+    ],
+    "tools": []
+  },
+  "workers": [
+    {
+      "name": "mockmate-resume-analyst",
+      "role": "resume_analyst",
+      "responsibilities": [
+        "parse_resume",
+        "extract_skills",
+        "match_jd"
+      ],
+      "skills": ["resume-parser", "skill-extractor", "jd-matcher"],
+      "tools": ["mock_resume.read_resume", "mock_jd.fetch_jd", "rag:jd_kb.search"],
+      "runtime": "qwenpow"
+    },
+    {
+      "name": "mockmate-tech-interviewer",
+      "role": "technical_interviewer",
+      "responsibilities": [
+        "pick_coding_question",
+        "pick_system_design_question",
+        "deep_dive_project"
+      ],
+      "skills": ["coding-question-picker", "system-design-prompter", "project-deep-dive"],
+      "tools": ["mock_question_bank.pick", "rag:jd_kb.search", "mock_evaluator.score_answer"],
+      "runtime": "qwenpow"
+    },
+    {
+      "name": "mockmate-hr-interviewer",
+      "role": "hr_interviewer",
+      "responsibilities": [
+        "self_intro",
+        "motivation_probe",
+        "pressure_handling",
+        "career_plan"
+      ],
+      "skills": ["behavioral-question-picker", "motivation-probe", "pressure-handler"],
+      "tools": ["mock_question_bank.pick", "mock_evaluator.score_answer"],
+      "runtime": "qwenpow"
+    },
+    {
+      "name": "mockmate-feedback-coach",
+      "role": "feedback_coach",
+      "responsibilities": [
+        "calibrate_scores",
+        "generate_report"
+      ],
+      "skills": ["answer-evaluator", "report-generator"],
+      "tools": ["mock_evaluator.cross_check", "mock_report.render"],
+      "runtime": "qwenpow"
+    }
+  ],
+  "creation_strategy": "serial",
+  "runtime_default": "qwenpow",
+  "risk_levels": {
+    "L1_auto": ["resume_analysis", "question_picking", "process_scoring"],
+    "L3_approval": ["final_verdict", "next_round_recommendation"]
+  },
+  "evidence_required": true,
+  "audit": {
+    "all_evaluations_must_have_evidence_refs": true,
+    "report_path_template": "scenarios/{scenario_id}.report.{md,json}"
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "candidate": "Zhang San",
+  "target_role": "后端开发实习生",
+  "interview_date": "2026-08-02",
+  "overall_score": 69,
+  "radar": {
+    "tech_depth": 80,
+    "system_design": 80,
+    "project_pitch": 60,
+    "coding": 80,
+    "behavioral": 65,
+    "motivation_fit": 60
+  },
+  "highlights": [
+    {
+      "text": "算法基础扎实，LRU 缓存思路清晰",
+      "evidence_refs": [
+        "question:lc-146-lru-cache",
+        "answer:turn-1"
+      ]
+    },
+    {
+      "text": "系统设计有 Redis 缓存意识",
+      "evidence_refs": [
+        "question:sd-short-url",
+        "answer:turn-2"
+      ]
+    },
+    {
+      "text": "压力面应对有结构化思路",
+      "evidence_refs": [
+        "question:hr-pressure-deadline-001",
+        "answer:turn-6"
+      ]
+    }
+  ],
+  "weaknesses": [
+    {
+      "text": "项目深挖回答过短，缺少量化数据",
+      "evidence_refs": [
+        "answer:turn-3"
+      ]
+    },
+    {
+      "text": "系统设计未展开容量估算",
+      "evidence_refs": [
+        "question:sd-short-url",
+        "answer:turn-2"
+      ]
+    },
+    {
+      "text": "职业规划回答偏笼统",
+      "evidence_refs": [
+        "answer:turn-7"
+      ]
+    }
+  ],
+  "improvements": [
+    "准备 2-3 个项目的 STAR 故事，每个包含 QPS/数据量/技术选型理由",
+    "系统设计练习容量估算方法（QPS -> 机器数 -> 存储量）",
+    "职业规划按「1年打基础 / 2年深耕 / 3年独当一面」结构展开",
+    "动机面准备「为什么选这家公司」的 3 个具体理由",
+    "刷 LeetCode 中等难度链表/哈希表题各 20 道"
+  ],
+  "next_7_days_plan": [
+    {
+      "day": 1,
+      "task": "复盘本次面试报告，标记 3 个最大短板"
+    },
+    {
+      "day": 2,
+      "task": "重写项目经历，加入 QPS/数据量/技术选型理由"
+    },
+    {
+      "day": 3,
+      "task": "系统设计：短链系统完整设计 + 容量估算练习"
+    },
+    {
+      "day": 4,
+      "task": "系统设计：秒杀系统完整设计 + 限流方案"
+    },
+    {
+      "day": 5,
+      "task": "LeetCode 链表 medium 5 道"
+    },
+    {
+      "day": 6,
+      "task": "HR 面准备：自我介绍 + 动机 + 职业规划各写 1 版"
+    },
+    {
+      "day": 7,
+      "task": "模拟面试 Round 2，对比本次报告看进步"
+    }
+  ],
+  "verdict": "建议补技能后投递"
+}

@@ -1,0 +1,43 @@
+{
+  "transport": "http-mock-tool-gateway",
+  "base_url": "http://<TOOL_HOST_REACHABLE_BY_WORKER>:18090",
+  "call_pattern": "POST /tools/{scenario_id}/{tool_name}.{function_name}",
+  "tools": [
+    {
+      "name": "mock_resume",
+      "kind": "http-mock-adapter",
+      "functions": ["read_resume"],
+      "future_mcp_mapping": "user.profile.read"
+    },
+    {
+      "name": "mock_jd",
+      "kind": "http-mock-adapter + RAG",
+      "functions": ["fetch_jd", "search_jd_kb"],
+      "future_mcp_mapping": "recruiter.jd.search + vector.search"
+    },
+    {
+      "name": "mock_question_bank",
+      "kind": "http-mock-adapter",
+      "functions": ["pick"],
+      "future_mcp_mapping": "quiz.bank.query"
+    },
+    {
+      "name": "mock_evaluator",
+      "kind": "http-mock-adapter",
+      "functions": ["cross_check", "score_answer"],
+      "future_mcp_mapping": "llm.judge.score + llm.judge.cross_check"
+    },
+    {
+      "name": "mock_report",
+      "kind": "http-mock-adapter",
+      "functions": ["render"],
+      "future_mcp_mapping": "doc.report.render"
+    }
+  ],
+  "rag": {
+    "name": "rag:jd_kb",
+    "description": "JD / 公司面经 知识库（向量检索）",
+    "implementation": "mock_jd.search_jd_kb 内部用关键词匹配模拟（demo），生产环境接真实向量数据库",
+    "future_mcp_mapping": "vector.search (e.g. Milvus / Qdrant)"
+  }
+}

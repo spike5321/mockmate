@@ -1,0 +1,98 @@
+{
+  "id": "backend_intern",
+  "title": "后端开发实习面试 - 字节跳动 / 腾讯",
+  "interview_type": "backend_intern",
+  "language": "zh-CN",
+
+  "candidate": {
+    "name": "Zhang San",
+    "school": "XX大学（985）",
+    "major": "计算机科学与技术",
+    "year": "大三",
+    "gpa": 3.6,
+    "gpa_scale": 4.0,
+    "contact": "zhangsan@xx.edu.cn",
+    "target_role": "后端开发实习生",
+    "target_company": "字节跳动 / 腾讯",
+    "resume_text": "# Zhang San\n\nXX大学（985） · 计算机科学与技术 · 大三 · GPA 3.6/4.0\n联系方式: zhangsan@xx.edu.cn\n\n## 教育背景\n- XX大学 计算机科学与技术 本科  2022.09 - 2026.06（预计）\n- 主修课程：数据结构、计算机网络、操作系统、数据库系统、计算机组成原理\n- GPA：3.6/4.0（专业前 20%）\n\n## 技能清单\n- **熟练**：Java、Spring Boot、MySQL、Redis、Git、Linux 基础命令\n- **了解**：Kafka、RabbitMQ、Docker、Nginx\n- **听过/课设用过**：Kubernetes、Spark、Hadoop、Elasticsearch\n\n## 项目经历\n\n### 1. 校园二手交易平台（2025.03 - 2025.06）\n**角色：后端主程**\n**技术栈：Spring Boot + MySQL + Redis + Vue（前端同事负责）**\n\n- 独立设计 REST API 30+ 个，覆盖商品发布、订单、支付、评论四大模块\n- 使用 Redis 缓存热门商品信息，缓存命中率达 85%，QPS 从 200 提升到 1200\n- 引入 Redisson 分布式锁，解决秒杀场景下的超卖问题（活动峰值 500 单/分钟）\n- 部署到阿里云 ECS（2 核 4G），上线 6 个月稳定运行，累计用户 3000+\n\n### 2. 简易博客系统（课程项目，2024.10 - 2024.12）\n**角色：全栈（个人项目）**\n**技术栈：Spring Boot + Thymeleaf + MySQL + Bootstrap**\n\n- 实现用户注册登录、文章发布、评论、标签等基本功能\n- 部署到腾讯云轻量应用服务器，HTTPS 配置\n\n## 实习经历\n\n### XX 小厂 - 后端实习生（2025.07 - 2025.09，3 个月）\n- 参与订单服务开发，使用 Spring Boot + MyBatis 重构老代码\n- 修复 3 个生产环境 P2 级别 bug（含一个缓存穿透问题）\n- 参与 Code Review，给团队提了 5 条规范建议被采纳\n\n## 荣誉\n- 校级一等奖学金（2023, 2024）\n- ACM 区域赛铜奖（2024）\n- 全国大学生数学建模竞赛省二等奖（2023）\n\n## 其他\n- GitHub: github.com/zhangsan（个人项目 3 个 stars 50+）\n- 英语 CET-6 500 分\n- 每周坚持刷 LeetCode（当前 200 题，medium 完成率 60%）"
+  },
+
+  "target_jd": {
+    "company": "字节跳动",
+    "role": "后端开发实习生",
+    "required_skills": ["Java", "Spring Boot", "MySQL", "Redis", "Linux", "数据结构与算法", "计算机网络基础"],
+    "bonus_skills": ["Kafka", "消息队列", "Docker", "Kubernetes", "分布式系统", "微服务"],
+    "responsibilities": [
+      "参与字节跳动后端服务的开发、测试、上线全流程",
+      "负责高并发场景下的性能优化和稳定性保障",
+      "与产品、客户端、测试同学协作完成需求交付",
+      "编写技术方案和工程文档"
+    ],
+    "jd_text": "我们正在寻找 2026 年毕业的优秀后端开发实习生。你将参与字节跳动核心业务（如抖音、电商、本地生活）的后端服务开发，要求：\n\n1. 计算机相关专业本科及以上学历（大三/研二优先）\n2. 熟练掌握 Java 语言，理解 JVM 基础原理\n3. 熟悉 Spring Boot / Spring Cloud 等主流框架\n4. 掌握 MySQL、Redis 等主流数据库和缓存\n5. 了解 Kafka、RabbitMQ 等消息队列\n6. 有分布式系统、高并发经验者优先\n7. 每周可实习 4 天以上，可实习 6 个月以上"
+  },
+
+  "jd_kb": [
+    {
+      "text": "字节跳动后端实习面试通常包含 3 轮：技术一面（算法 + 项目）→ 技术二面（系统设计 + 算法）→ HR 面。算法题多为 LeetCode medium 难度，重点考察链表、树、哈希表。",
+      "tags": ["面试流程", "难度", "知识点"]
+    },
+    {
+      "text": "字节面试特别看重项目深挖，会追问技术选型理由、QPS 性能数据、线上故障处理经验。建议候选人准备 1-2 个有数据支撑的项目。",
+      "tags": ["项目", "准备建议"]
+    },
+    {
+      "text": "字节 HR 面经常问'为什么选择字节'，建议候选人提前了解抖音/飞书/电商的具体业务，能说出自己的使用体验和改进想法。",
+      "tags": ["HR", "动机"]
+    },
+    {
+      "text": "字节后端实习 JD 常见关键词：Java、Spring Boot、MySQL、Redis、Kafka、分布式、高并发。加分项：Kubernetes、微服务、消息队列。",
+      "tags": ["技能要求", "关键词"]
+    }
+  ],
+
+  "interview_focus": [
+    "项目深挖：二手交易平台 QPS 1200 的依据 + 秒杀超卖解决方案",
+    "算法：中等难度链表/树（重点 LRU、反转链表）",
+    "系统设计：短链生成系统 或 秒杀系统",
+    "HR 行为面：自我介绍 + 动机 + 压力 + 职业规划"
+  ],
+
+  "expected_phases": [
+    {
+      "phase": "resume_analysis",
+      "agent": "Resume Analyst",
+      "duration_min": 1,
+      "output": "candidate profile + jd_match"
+    },
+    {
+      "phase": "technical_interview",
+      "agent": "Technical Interviewer",
+      "duration_min": 15,
+      "rounds": [
+        {"track": "coding", "expected_time_min": 5, "expected_score_range": [6, 8]},
+        {"track": "system_design", "expected_time_min": 5, "expected_score_range": [5, 7]},
+        {"track": "project", "expected_time_min": 5, "expected_score_range": [7, 9]}
+      ]
+    },
+    {
+      "phase": "hr_interview",
+      "agent": "HR Interviewer",
+      "duration_min": 10,
+      "rounds": [
+        {"stage": "self_intro", "expected_time_min": 2},
+        {"stage": "motivation", "expected_time_min": 3},
+        {"stage": "pressure", "expected_time_min": 3},
+        {"stage": "career_plan", "expected_time_min": 2}
+      ]
+    },
+    {
+      "phase": "feedback_report",
+      "agent": "Feedback Coach",
+      "duration_min": 1,
+      "output": "structured report (json + md)"
+    }
+  ],
+
+  "expected_overall_score_range": [70, 85],
+  "expected_verdict": "可以投递，建议二轮前补 Kafka + 系统设计"
+}
