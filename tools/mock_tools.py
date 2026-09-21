@@ -303,19 +303,31 @@ def mock_evaluator_score_answer(scenario_id: str, question: Dict[str, Any], answ
 # ---------------------------------------------------------------------------
 
 
-def mock_report_render(scenario_id: str, template: str, data: Dict[str, Any]) -> Dict[str, Any]:
+def mock_report_render(
+    scenario_id: str,
+    template: str,
+    data: Dict[str, Any],
+    out_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
     """渲染结构化报告。
 
     返回: { "report_md": "...", "report_json": {...}, "report_path": "..." }
+
+    `out_dir` 指定报告落盘目录，默认写 `scenarios/`（真实运行就该写那里）。
+    自检脚本（`e2e_test.py`）会传一个临时目录 —— 否则跑一次自检就把
+    `scenarios/*.report.md` 覆盖成 mock 数据了，那是真实运行产物的位置。
     """
+    target_dir = Path(out_dir) if out_dir else SCENARIOS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+
     # 写 JSON 报告
-    report_path = SCENARIOS_DIR / f"{scenario_id}.report.json"
+    report_path = target_dir / f"{scenario_id}.report.json"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     # 渲染 Markdown 报告
     md = _render_markdown_report(data)
-    md_path = SCENARIOS_DIR / f"{scenario_id}.report.md"
+    md_path = target_dir / f"{scenario_id}.report.md"
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md)
 

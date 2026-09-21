@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -361,6 +362,25 @@ def test_report_files_land_in_sandbox(box, sandbox_scenarios):
     assert (sandbox_scenarios / f"{SCENARIO}.report.md").exists()
     assert (sandbox_scenarios / f"{SCENARIO}.report.json").exists()
     assert box.report_md_path.endswith(".report.md")
+
+
+def test_report_render_out_dir_redirects_output(tmp_path):
+    """★ 调用方可以指定报告落盘目录 —— `e2e_test.py` 靠它不污染真实产物。
+
+    `python e2e_test.py` 是 README 里推荐的"不花钱的自检"，但它会**真实落盘报告**。
+    没有这个参数的话，照着 README 跑一次自检，就把 `scenarios/*.report.*`
+    覆盖成 mock 数据了 —— 而那正是真实运行产物的位置。
+
+    这条测试不需要 sandbox 装置，因为它显式传了 `out_dir`，
+    本身就证明"传了 out_dir 就不碰 SCENARIOS_DIR"。
+    """
+    from tools.mock_tools import mock_report_render
+
+    out = mock_report_render("demo", "default", {"verdict": "x"}, out_dir=tmp_path)
+
+    assert Path(out["report_path"]).parent == tmp_path
+    assert Path(out["md_path"]).parent == tmp_path
+    assert Path(out["report_path"]).read_text(encoding="utf-8").strip()
 
 
 def test_submit_report_without_records_has_no_average(box, sandbox_scenarios):

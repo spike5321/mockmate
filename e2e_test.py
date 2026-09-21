@@ -5,7 +5,9 @@ MockMate 端到端测试脚本
 import json
 import sys
 import os
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
 # 添加项目根目录到 path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -21,6 +23,12 @@ from tools.mock_tools import (
 )
 
 SCENARIO_ID = "backend_intern"
+
+# 自检产物写到临时目录。
+# 这个脚本会真实落盘报告，如果写进 scenarios/ 就会把真实运行的报告覆盖掉
+# （scenarios/*.report.md 是 README 实测数据的原件）。
+# 想保留自检产物，用环境变量 MOCKMATE_E2E_OUTDIR 指定一个目录。
+OUT_DIR = Path(os.environ.get("MOCKMATE_E2E_OUTDIR") or tempfile.mkdtemp(prefix="mockmate_e2e_"))
 
 # 模拟候选人回答（不同质量，让评分有区分度）
 SAMPLE_ANSWERS = {
@@ -221,7 +229,7 @@ def main():
         "verdict": "建议补技能后投递",
     }
 
-    result = mock_report_render(SCENARIO_ID, template="default", data=report_data)
+    result = mock_report_render(SCENARIO_ID, template="default", data=report_data, out_dir=OUT_DIR)
     print(f"  报告已生成:")
     print(f"  Markdown: {result.get('md_path', 'N/A')}")
     print(f"  JSON:     {result.get('report_path', 'N/A')}")
@@ -258,7 +266,7 @@ def main():
         print(f"    {dim:20s} {val:3d}/100  {bar}")
 
     print(f"""
-  报告文件:
+  报告文件（写到临时目录，不会覆盖 scenarios/ 下的真实运行产物）:
     - {result.get('md_path', '')}
     - {result.get('report_path', '')}
 

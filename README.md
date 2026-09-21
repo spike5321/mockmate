@@ -5,7 +5,7 @@
 > 这是一个**自研的 LLM Agent 调度循环**：模型自己决定下一步做什么——读简历、检索岗位情报、出题、追问、打分、交报告、结束，
 > 循环什么时候停也由它判断。**决策循环是这个仓库自己写的代码，不依赖任何 Agent 框架。**
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-117%20passed-brightgreen)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-118%20passed-brightgreen)
 
 ### ▶ 先看这个：一次真实运行的完整回放
 
@@ -180,10 +180,13 @@ python -u orchestrator.py --scenario backend_intern
 python e2e_test.py     # 离线跑一遍工具链路，不调模型、不消耗额度
 ```
 
+> 自检产物（报告）写到系统临时目录，不会覆盖 `scenarios/` 下的真实运行产物。
+> 想留下自检产物：`MOCKMATE_E2E_OUTDIR=./tmp python e2e_test.py`。
+
 ### 跑测试
 
 ```bash
-python -m pytest tests -v     # 117 项，离线，不需要 API Key
+python -m pytest tests -v     # 118 项，离线，不需要 API Key
 ```
 
 单测只覆盖**确定性**的部分——也就是"能被机器判定对错"的那些：
@@ -348,16 +351,26 @@ mockmate/
 │   ├── architecture.md          # 架构说明
 │   ├── replay/index.html        # ★ 运行回放页（构建产物，可直接双击打开）
 │   └── examples/                # 一次真实运行的轨迹与报告（可审计）
+├── tests/                       # pytest 单测（离线、不花额度）
+├── legacy/                      # 早期形态归档，不参与运行（含提示词素材）
 ├── traces/                      # 每次运行的决策轨迹（gitignore，本地生成）
 └── e2e_test.py                  # 离线工具自检
 ```
 
+整个仓库里，**只有 `orchestrator.py` / `agent/` / `kb/` / `tools/mock_tools.py` 这四块是运行时会用到的**，
+其余都是数据（`scenarios/` `knowledge/`）、文档（`docs/`）或历史归档（`legacy/`）。
+
 ### 历史遗留
 
-`agents/`（5 个 Agent 定义）、`skills/`（11 个 Skill 定义）、`at/`（AgentTeams 配置）和 `tools/mock_tool_server.py`
-是这个项目**早期形态**的产物——那时候决策循环跑在别人的平台上，仓库里只有提示词定义。
-现在循环由 `orchestrator.py` 自己实现，这些目录只剩"提示词素材"的价值（`agent/prompts.py` 就是从 `agents/interview-coordinator/Agent.md` 改写来的）。
-它们会在后续版本里归档到 `legacy/`。
+`legacy/` 里放的是这个项目**早期形态**的产物：5 个 Agent 定义、11 个 Skill 定义、
+AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人的平台上，仓库里只有提示词定义。
+
+现在循环由 `orchestrator.py` 自己实现，那批文件**不参与运行**，但没白留——
+`agent/prompts.py` 的系统提示词就是从 `legacy/agents/interview-coordinator/Agent.md` 改写来的，
+改的只有"调度 Worker"→"自己调工具"这一处。
+里面还标注了两个**内容已过时**的文件（旧版知乎文章和参赛简介），别直接拿去发布。
+
+细节见 [`legacy/README.md`](legacy/README.md)。
 
 ---
 
@@ -384,7 +397,7 @@ mockmate/
 - [x] **阶段 4** 门面 ← 进行中
   - [x] README 重写 + mermaid 架构图 + 实测数据（取自 `traces/`，可审计）
   - [x] `docs/architecture.md` 重写为可上手版本
-  - [x] pytest 单测 117 项（离线、不花额度）
+  - [x] pytest 单测 118 项（离线、不花额度）
   - [x] **运行回放页**（`docs/replay/`，单文件静态 HTML，由轨迹生成）
   - [ ] Demo 录屏 GIF（可选，回放页已覆盖大部分需求）
   - [ ] 开启 GitHub Pages（Settings → Pages → Source: `main` / `docs`）

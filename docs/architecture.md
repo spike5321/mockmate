@@ -1,7 +1,7 @@
 # MockMate 架构说明
 
 > 这份文档描述的是**当前形态**：决策循环由 `orchestrator.py` 自己实现，不依赖 AgentTeams / Element / Matrix。
-> 早期基于平台的形态见 `agents/`、`skills/`、`at/` 三个目录（仅作提示词素材保留）。
+> 早期基于平台的形态见 `legacy/` 目录（5 Agent / 11 Skill / AgentTeams 配置，仅作提示词素材保留，不参与运行）。
 >
 > README 里是"能看懂"的版本，这里是"要上手改"的版本。
 
@@ -259,7 +259,7 @@ docs/examples/run14_report.json ─┘
 ### 改完怎么验证
 
 ```bash
-python -m pytest tests -v     # 117 项，离线，不需要 API Key，约 1.5 秒
+python -m pytest tests -v     # 118 项，离线，不需要 API Key，约 1.2 秒
 python e2e_test.py           # 工具链路端到端自检（也不调模型）
 ```
 

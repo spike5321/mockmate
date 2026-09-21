@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """系统提示词。
 
-这里面的内容**来自 `agents/interview-coordinator/Agent.md`**（原方案里的 Lead 定义），
+这里面的内容**来自 `legacy/agents/interview-coordinator/Agent.md`**（原方案里的 Lead 定义），
 但做了一处关键改写：
 
     原文写的是「调度 4 个业务 Worker」——那是跑在 AgentTeams 平台上的写法，
