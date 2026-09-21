@@ -1,0 +1,23 @@
+{
+  "_comment": "模拟候选人的回答脚本（面试陪练用的测试夹具，与真实候选人无关）。查询优先级：题目 id > hr:stage > track。之所以以 id 为主，是因为题库出题带随机性（coding/medium 有 3 道题随机抽），按题型索引必然答非所问。_fallback 用于题库外的自由提问（项目深挖、追问），按顺序取用。",
+
+  "lc-146-lru-cache": "用哈希表 + 双向链表实现。哈希表存 key->node 映射实现 O(1) 查找，双向链表维护访问顺序。get 时把节点移到头部，put 时如果满了就删尾部节点。这样 get/put 都是 O(1)。空间复杂度 O(capacity)。",
+  "lc-25-reverse-k-group": "用迭代 + 虚拟头节点。先数出总长度，然后每次取 k 个节点，用普通的链表反转把这一段翻过来，再把前一段的尾接上当前段的新头。不足 k 个的最后一组保持原序。时间复杂度 O(n)，空间 O(1)。\n\n代码：\n\ndef reverseKGroup(head, k):\n    dummy = ListNode(0)\n    dummy.next = head\n    group_prev = dummy\n    while True:\n        kth = group_prev\n        for _ in range(k):\n            kth = kth.next\n            if not kth:\n                return dummy.next\n        group_next = kth.next\n        prev, cur = kth.next, group_prev.next\n        for _ in range(k):\n            nxt = cur.next\n            cur.next = prev\n            prev = cur\n            cur = nxt\n        tmp = group_prev.next\n        group_prev.next = kth\n        group_prev = tmp",
+  "lc-1-two-sum": "用哈希表一次遍历。遍历数组时，先查 target - nums[i] 在不在表里，在的话就返回两个下标；不在就把当前值和下标存进去。这样时间复杂度 O(n)，空间 O(n)。\n\n代码：\n\ndef twoSum(nums, target):\n    seen = {}\n    for i, v in enumerate(nums):\n        if target - v in seen:\n            return [seen[target - v], i]\n        seen[v] = i\n    return []\n\n注意是先把 target - v 和表里比，再存当前值，这样能避免同一个元素用两次。",
+  "lc-200-island-number": "思路是遍历整个网格，遇到 '1' 就说明发现了一个新岛屿，计数加一，然后从这个点开始做 DFS，把和它相连的所有 '1' 都改成 '0' 标记成已访问，避免重复计数。上下左右四个方向递归。\n\n代码：\n\ndef numIslands(grid):\n    if not grid:\n        return 0\n    m, n = len(grid), len(grid[0])\n    def dfs(i, j):\n        if i < 0 or i >= m or j < 0 or j >= n or grid[i][j] != '1':\n            return\n        grid[i][j] = '0'\n        dfs(i + 1, j); dfs(i - 1, j)\n        dfs(i, j + 1); dfs(i, j - 1)\n    count = 0\n    for i in range(m):\n        for j in range(n):\n            if grid[i][j] == '1':\n                count += 1\n                dfs(i, j)\n    return count\n\n时间复杂度 O(m*n)，最坏空间 O(m*n)（递归栈深度）。如果担心栈溢出可以改成 BFS 用队列。",
+
+  "sd-short-url": "数据模型：短码 -> 原URL映射，存 MySQL。API：POST /shorten 生成短链，GET /:code 跳转。用 Redis 缓存热点短链减少 DB 压力。生成算法用自增 ID + Base62 编码。",
+  "sd-seckill": "秒杀的话，主要是要抗住瞬时高并发。我的想法是：第一层用 Redis 做库存预扣减，用 Lua 脚本保证原子性，避免超卖；第二层用消息队列把下单请求异步化，削峰填谷；数据库层面做库存扣减的最终校验。另外前端可以做按钮置灰、限流防刷。",
+
+  "hr-self-intro-001": "我是XX大学计算机专业大三学生，在校期间做过一个校园二手交易平台，用 Spring Boot + MySQL + Redis，日活 500+。我对后端开发很感兴趣，特别是高并发场景，所以想申请字节后端实习，能在高并发环境下锻炼自己。",
+  "hr-motivation-001": "字节跳动技术氛围好，用户量大，能接触到真正的高并发场景，对我成长帮助大。",
+  "hr-pressure-deadline-001": "首先我会评估两个任务的工作量和风险，然后找 PM 沟通，说明同时上线的风险，建议按业务优先级排序。如果确实都重要，我会拉上两个 PM 一起对齐优先级，必要时向 leader 求助，确保至少核心功能能按时上线。",
+  "hr-career-001": "短期希望深入后端开发，打好基础。中期想往架构方向发展。长期希望能独当一面。",
+
+  "_fallback": [
+    "我用了 Redis 做缓存，QPS 大概 2000 左右。",
+    "这块我当时主要是跟着需求做的，具体的性能数据没有专门统计过，就知道上线之后没出过大问题。",
+    "（想了想）这块我确实准备得不太充分，回去我会补一下这方面的知识。",
+    "不好意思面试官，这一题我答不上来，我回去会好好看一下。"
+  ]
+}
