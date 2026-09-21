@@ -251,10 +251,11 @@ python -m pytest tests -v     # 118 项，离线，不需要 API Key
 
 ### 5.4 Agentic RAG：检索是工具，不是管线
 
-同一个作者写的 [`rag-knowledge-assistant`](https://github.com/spike5321/rag-knowledge-assistant) 是**固定管线**：
-`retrieve → 拼 prompt → 生成`，模型的权限只到"写答案"为止。
+同一个作者写的 [`rag-knowledge-assistant`](https://github.com/spike5321/rag-knowledge-assistant)
+是**同一套检索层的独立形态**（本项目的 `kb/` 就是它的内嵌形态，切分算法一份、两边同步）：
+在里面检索是**固定管线**，`retrieve → 拼 prompt → 生成`，模型的权限只到"写答案"为止。
 
-在 MockMate 里，检索是一个**工具**：模型自己决定**查什么**、查几次、拿到片段怎么用。
+差别不在代码，在**调用方式**。在 MockMate 里，检索是一个**工具**：模型自己决定**查什么**、查几次、拿到片段怎么用。
 实测这一场里模型自发检索了两次，query 是自然语言：
 
 - `Redis缓存三大问题怎么答`
