@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MockMate 运行回放 · 自研 Agent 调度循环</title>
+<style>
+:root{
+  --bg:#ffffff; --bg2:#f6f5f2; --bg3:#eeede8;
+  --fg:#191918; --fg2:#5f5e5a; --fg3:#8d8b83;
+  --line:rgba(0,0,0,.12); --line2:rgba(0,0,0,.24);
+  --accent:#185fa5; --accent-bg:#e6f1fb;
+  --ok:#3b6d11; --ok-bg:#eaf3de;
+  --warn:#a32d2d; --warn-bg:#fcebeb;
+  --amber:#854f0b; --amber-bg:#faeeda;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#1b1b1a; --bg2:#262625; --bg3:#302f2e;
+    --fg:#efeee9; --fg2:#b4b2a9; --fg3:#8d8b83;
+    --line:rgba(255,255,255,.14); --line2:rgba(255,255,255,.26);
+    --accent:#85b7eb; --accent-bg:#0c447c;
+    --ok:#c0dd97; --ok-bg:#27500a;
+    --warn:#f09595; --warn-bg:#501313;
+    --amber:#fac775; --amber-bg:#412402;
+  }
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+}
+.wrap{max-width:920px; margin:0 auto; padding:2.5rem 1.25rem 4rem}
+h1{font-size:22px; font-weight:600; margin:0 0 6px}
+h2{font-size:16px; font-weight:600; margin:2.5rem 0 .75rem}
+h3{font-size:14px; font-weight:600; margin:0 0 8px}
+p{margin:.5rem 0}
+.muted{color:var(--fg2)}
+.dim{color:var(--fg3)}
+.small{font-size:13px}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+code{background:var(--bg3); border-radius:4px; padding:1px 5px; font-size:12.5px}
+a{color:var(--accent)}
+.card{background:var(--bg2); border:1px solid var(--line); border-radius:12px; padding:1rem 1.25rem}
+.grid{display:grid; gap:10px}
+.stats{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.stat{background:var(--bg2); border-radius:10px; padding:.85rem 1rem}
+.stat .k{font-size:12.5px; color:var(--fg2)}
+.stat .v{font-size:23px; font-weight:600; line-height:1.35}
+.stat .u{font-size:12.5px; color:var(--fg2); font-weight:400}
+.strip{display:flex; gap:3px; margin:.5rem 0}
+.tick{flex:1 1 0; height:30px; border-radius:4px; cursor:pointer; border:1px solid var(--line); background:var(--bg3); padding:0; display:flex; align-items:flex-end; justify-content:center; font-size:10px; color:var(--fg3)}
+.tick.tool{background:var(--accent-bg); border-color:var(--accent)}
+.tick.end{background:var(--ok-bg); border-color:var(--ok)}
+.tick.on{outline:2px solid var(--accent); outline-offset:1px}
+.controls{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:.85rem 0}
+button{font:inherit; font-size:13px; padding:5px 12px; border-radius:8px; border:1px solid var(--line2); background:transparent; color:var(--fg); cursor:pointer}
+button:hover{background:var(--bg3)}
+button.primary{border-color:var(--accent); color:var(--accent)}
+.chip{font-size:12px; font-family:ui-monospace,Consolas,monospace; background:var(--accent-bg); color:var(--accent); border-radius:6px; padding:3px 8px; display:inline-block; margin:0 6px 6px 0}
+.chip.plain{font-family:inherit; background:var(--bg3); color:var(--fg2)}
+.quote{background:var(--bg); border-left:3px solid var(--line2); padding:.5rem .85rem; border-radius:0 8px 8px 0; margin:.35rem 0}
+.lbl{font-size:12.5px; color:var(--fg2); margin:.85rem 0 .2rem}
+table{width:100%; border-collapse:collapse; font-size:13px}
+th,td{text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top}
+th{color:var(--fg2); font-weight:500; font-size:12.5px}
+.bar{height:7px; border-radius:4px; background:var(--bg3); overflow:hidden; min-width:44px}
+.bar i{display:block; height:100%; background:var(--accent)}
+.scorebad{font-weight:600; font-size:15px}
+.s0{color:var(--warn)} .s5{color:var(--amber)} .s7{color:var(--ok)}
+ul{margin:.35rem 0 .35rem 1.1rem; padding:0}
+li{margin:.2rem 0}
+.radarwrap{display:flex; gap:1.5rem; flex-wrap:wrap; align-items:center}
+footer{margin-top:3rem; padding-top:1.25rem; border-top:1px solid var(--line); font-size:12.5px; color:var(--fg3)}
+@media (max-width:560px){ .wrap{padding:1.5rem 1rem 3rem} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MockMate · 运行回放</h1>
+  <p class="muted small">
+    一场模拟面试的完整决策轨迹。每一轮都能看到<b>模型为什么决定下一步做什么</b>，
+    以及它实际调用了哪个工具 —— 最后接上真实的复盘报告。
+  </p>
+  <p class="dim small" id="meta"></p>
+
+  <h2>① 这一次运行</h2>
+  <div class="grid stats" id="stats"></div>
+
+  <h2>② 决策密度</h2>
+  <p class="muted small">
+    每一格是一轮。深色格 = 这一轮模型发起了工具调用，浅色格 = 纯对话轮。
+    点任意一格可以跳过去看那一轮发生了什么。
+  </p>
+  <div class="strip" id="strip"></div>
+  <div class="controls">
+    <button class="primary" id="play">播放</button>
+    <button id="prev">← 上一轮</button>
+    <button id="next">下一轮 →</button>
+    <span class="dim small" id="pos"></span>
+    <span class="dim small">（也可以用键盘 ← → 翻页）</span>
+  </div>
+
+  <div class="card" id="detail"></div>
+
+  <h2>③ 复盘报告</h2>
+  <div class="card">
+    <div class="radarwrap">
+      <div id="radar"></div>
+      <div style="flex:1 1 260px; min-width:220px">
+        <div class="grid stats" style="grid-template-columns:repeat(2,1fr)">
+          <div class="stat"><div class="k">模型给的总体分</div><div class="v" id="overall"></div></div>
+          <div class="stat"><div class="k">系统算的逐题均分</div><div class="v" id="avg"></div></div>
+        </div>
+        <p class="small muted" id="anchor-note" style="margin-top:.75rem"></p>
+      </div>
+    </div>
+    <p class="quote" id="verdict" style="margin-top:1rem"></p>
+  </div>
+
+  <h3 style="margin-top:1.5rem">逐题评分明细</h3>
+  <p class="muted small">
+    总分不是模型拍的：模型只判每个维度的达成度，加权计算由代码完成。
+    下面每一行都能展开看到维度分和判分依据原文。
+  </p>
+  <div id="rounds"></div>
+
+  <h3 style="margin-top:1.5rem">亮点 / 短板 / 改进建议</h3>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+    <div class="card"><h3>亮点</h3><ul id="highlights"></ul></div>
+    <div class="card"><h3>短板</h3><ul id="weaknesses"></ul></div>
+    <div class="card"><h3>改进建议</h3><ul id="improvements"></ul></div>
+  </div>
+
+  <h3 style="margin-top:1.5rem">7 天训练计划</h3>
+  <div class="card"><ul id="plan"></ul></div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script type="application/json" id="payload">{"meta":{"candidate":"Zhang San","role":"后端开发实习生","company":"字节跳动 / 腾讯","date":"2026-09-21 20:11","generated_by":"orchestrator (自研调度循环)","built_at":"2026-09-21 21:39","trace_file":"run14_trace.json","report_file":"run14_report.json"},"summary":{"tool_calls":20,"questions_asked":7,"answers_scored":7,"avg_score":5.14,"scored_by_llm":7,"scored_by_rule":0,"finished":true,"finish_reason":"面试完成，已提交复盘报告","report_path":"D:\\Project_01\\mockmate\\scenarios\\backend_intern.report.json","turns":32,"elapsed_sec":162.4,"llm_calls":39,"judge_calls":7,"prompt_tokens":278364,"completion_tokens":5860,"error":null},"turns":[{"turn":1,"tools":["read_resume"],"thinking":"好的，我需要按照流程开始面试。根据指示，我需要： 1. 先调 `read_resume` 读简历 2. 再调 `fetch_jd` 读岗位要求 3. 调 `search_jd_kb` 检索岗位知识库 4. 然后进行技术面（3题）和HR面（4题） 让我开始第一步，读取简历。","content":"我来开始这场模拟面试。首先让我了解一下候选人的简历和岗位要求。"},{"turn":2,"tools":["fetch_jd"],"thinking":"好的，我已经读取了候选人的简历。让我总结一下关键信息： 候选人 Zhang San： - XX大学（985）计算机科学与技术大三学生，GPA 3.6/4.0（专业前20%） - 技能：熟练Java、Spring Boot、MySQL、Redis、Git、Linux基础命令；了解Kafka、RabbitMQ、Docker、Nginx - 项目经历： 1. 校园二手交易平台（2025.03-2025.06）：后端主程，Spring Boot + MySQL + Redis，设计30+ API，Redis缓存命中率85%，QPS从200提升到1200，使用Redisson分布式锁解决秒杀超卖问题 2. 简易博客系统（2024.10-2024.12）：全栈个人项目，Spring Boot + Thymeleaf + MySQL - 实习经历：XX小厂后端实习生（2025.07-2025.09，3个月），参与订单服务开发，修复3个P2级别bug（含缓存穿透问题） - 荣誉：校级一等奖学金、ACM区域赛铜奖、数学建模省二等奖 - 其他：LeetCode 200题，medium完成率60%，GitH …","content":""},{"turn":3,"tools":["search_jd_kb"],"thinking":"现在我需要检索岗位知识库，了解面试流程、高频技术考点和常见追问套路。我应该搜索一些关键的技术考点，比如Redis缓存、分布式系统、高并发等。 让我先搜索一些高频的技术考点。","content":""},{"turn":4,"tools":["search_jd_kb"],"thinking":"好的，我已经读取了简历和JD，并且检索了Redis缓存三大问题的考点。现在让我继续检索一些其他高频考点，特别是关于分布式系统和Spring Boot的。 从简历来看，候选人Zhang San是一个大三学生，有： - 校园二手交易平台项目（后端主程，Spring Boot + MySQL + Redis） - 简易博客系统（全栈） - 小厂实习经历（3个月） - 技术栈：熟练Java、Spring Boot、MySQL、Redis，了解Kafka、RabbitMQ、Docker等 JD要求：Java、Spring Boot、MySQL、Redis、Linux、数据结构与算法、计算机网络基础，加分项包括Kafka、消息队列、Docker、Kubernetes、分布式系统、微服务。 从Redis缓存三大问题的检索结果来看，我需要重点关注缓存穿透、缓存击穿、缓存雪崩这三个问题。 让我再检索一些其他高频考点。","content":""},{"turn":5,"tools":["pick_question"],"thinking":"现在我有了简历、JD和知识库信息。让我分析一下： **候选人信息：** - 张三，985高校计算机大三学生，GPA 3.6/4.0 - 技能：熟练Java、Spring Boot、MySQL、Redis、Git、Linux基础命令 - 有两个项目：校园二手交易平台（后端主程）、简易博客系统（全栈） - 有3个月实习经历，参与过订单服务开发，修复过生产环境bug - LeetCode 200题，medium完成率60% **岗位要求：** - 字节跳动后端开发实习生 - 要求：Java、Spring Boot、MySQL、Redis、Linux、数据结构与算法、计算机网络基础 - 加分项：Kafka、消息队列、Docker、Kubernetes、分布式系统、微服务 - 职责：参与后端服务开发、高并发性能优化、协作交付、编写技术文档 **知识库考点：** - Redis缓存三大问题（穿透、击穿、雪崩） - 分布式系统高并发设计（限流、分布式锁、消息队列、异步化） - 系统设计流程（需求分析、容量估算、接口设计、数据模型、存储选型、缓存策略） 现在开始面试流程： 1. 技术面（3题）： - …","content":"好的，我已经了解了你的简历和岗位要求。现在开始正式面试。 首先进行技术面，我们先来一道算法题。"},{"turn":6,"tools":[],"thinking":"拿到了算法题，题目是岛屿数量，这是一个经典的DFS/BFS题目。我需要按照题目原文向候选人提问。","content":"请实现一个算法，计算二维网格中岛屿的数量。岛屿被水包围，并且是通过水平或垂直方向连接的陆地（'1'）形成的。你可以假设网格的所有四个边缘都被水包围。 网格示例： ``` [ [\"1\",\"1\",\"1\",\"1\",\"0\"], [\"1\",\"1\",\"0\",\"1\",\"0\"], [\"1\",\"1\",\"0\",\"0\",\"0\"], [\"0\",\"0\",\"0\",\"0\",\"0\"] ] ``` 在这个例子中，岛屿数量为 1。 请写出你的解决方案。"},{"turn":7,"tools":["score_answer"],"thinking":"候选人回答得很好，思路清晰，代码实现正确。他提到了： 1. 遍历网格，遇到'1'就计数并DFS 2. DFS会把相连的'1'都标记成'0' 3. 考虑了边界条件 4. 给出了时间复杂度分析 5. 还提到了可以用BFS替代DFS避免栈溢出 这是一个很好的回答，应该给高分。我需要调用score_answer来评分。","content":""},{"turn":8,"tools":["log_custom_question"],"thinking":"好的，算法题已经问完了，评分是9分。接下来要进行项目深挖题。根据简历，我重点看他的校园二手交易平台项目，因为这是他作为后端主程的项目，涉及Redis缓存、分布式锁等关键技术。 我需要先登记这个项目深挖题，然后再提问。根据简历，这个项目涉及： 1. REST API设计 2. Redis缓存（85%命中率，QPS从200提升到1200） 3. Redisson分布式锁解决秒杀超卖问题 4. 阿里云部署，3000+用户 我应该重点追问技术选型理由和量化数据。","content":"现在我们来深入聊聊你的校园二手交易平台项目。你在简历中提到这是你作为后端主程的项目，涉及Redis缓存和分布式锁等技术。"},{"turn":9,"tools":[],"thinking":"","content":"在你的校园二手交易平台项目中，你提到使用Redis缓存热门商品信息，缓存命中率达85%，QPS从200提升到1200。请详细说明一下你的缓存设计方案：1）你是如何选择要缓存哪些数据的？2）缓存策略是什么（比如缓存过期时间、更新策略）3）有没有考虑过缓存穿透、击穿、雪崩的问题？"},{"turn":10,"tools":[],"thinking":"候选人回答得比较简短，没有详细说明缓存设计方案的具体内容。我需要追问一下，让他详细说明： 1. 缓存数据选择策略 2. 缓存过期和更新策略 3. 缓存三大问题处理 4. 量化数据支撑 他的回答只是简单提到了热点数据和限流计数，但没有深入展开。我应该追问这些具体的设计细节。","content":"你的回答比较简短。能否详细展开一下： 1. **缓存数据选择策略**：具体哪些数据被定义为\"热点数据\"？是基于什么标准（比如访问频率、商品热度、价格区间等）来选择要缓存的数据？ 2. **缓存策略**：缓存过期时间是怎么设定的？是固定的TTL还是动态调整？当商品信息更新时，缓存是如何同步更新的？ 3. **缓存三大问题处理**：你提到过缓存穿透、击穿、雪崩的问题，具体是怎么处理的？比如： - 缓存穿透：对不存在的商品ID做了什么处理？ - 缓存击穿：对热点商品过期时有什么保护机制？ - 缓存雪崩：如何避免大量key同时过期？ 4. **量化数据支撑**：85%的缓存命中率是如何统计的？QPS从200提升到1200这个数据有具体的监控指标吗？ 请详细说明这些设计细节。"},{"turn":11,"tools":[],"thinking":"用户回答的是关于下单和库存扣减的并发问题，但这不是我刚才问的缓存设计方案问题。我刚才问的是： 1. 缓存数据选择策略 2. 缓存策略（过期时间、更新策略） 3. 缓存三大问题处理 4. 量化数据支撑 但用户回答的是库存扣减的并发问题，这偏离了问题。我需要引导他回到我最初的问题上，关于缓存设计的具体细节。 不过从他的回答可以看出，他确实有一些实际的项目经验，提到了Redis和Lua脚本，这很好。我需要让他详细说明缓存设计方面的内容。","content":"我理解你在项目中遇到了库存扣减的并发问题，这确实是高并发场景下的常见挑战。 不过我刚才问的是关于**缓存设计方案**的具体细节，能否请你详细说明： 1. **缓存数据选择策略**：具体哪些商品信息被缓存了？是全部商品还是只缓存热门商品？选择标准是什么？ 2. **缓存策略**： - 缓存过期时间是如何设定的？ - 当商品信息（比如价格、描述）更新时，缓存是如何同步更新的？ - 是主动更新还是被动失效？ 3. **缓存三大问题处理**： - 缓存穿透：对不存在的商品ID，你是如何处理的？ - 缓存击穿：对热门商品缓存过期时，有什么保护机制？ - 缓存雪崩：如何避免大量key同时过期导致数据库压力？ 4. **量化数据**：85%的缓存命中率是如何统计的？QPS从200提升到1200这个数据有什么具体的监控指标支撑？ 请详细说明这些缓存设计方面的具体实现。"},{"turn":12,"tools":["score_answer"],"thinking":"候选人这次回答的是关于压测和数据的问题，但我问的是缓存设计方案的具体细节。他似乎没有直接回答我关于缓存数据选择策略、缓存策略、缓存三大问题处理等具体问题。 从他的回答来看： 1. 他没有详细说明缓存数据选择策略 2. 没有说明缓存过期时间、更新策略 3. 没有说明如何处理缓存三大问题 4. 承认了压测和数据统计方面的欠缺 我需要基于他的回答进行评分，然后继续下一题。根据rubric，我需要考察： - 缓存数据选择策略 - 缓存过期和更新策略 - 缓存三大问题处理 - 量化数据支撑 从回答来看，他在这些方面都没有给出具体的答案，需要评分。","content":""},{"turn":13,"tools":["pick_question"],"thinking":"候选人关于项目深挖的回答确实比较空泛，没有详细说明缓存设计的具体细节。评分0分是合理的，因为确实没有回答到问题的要点。 现在我需要继续进行技术面的下一题：系统设计题。","content":"现在我们来一道系统设计题。"},{"turn":14,"tools":[],"thinking":"","content":"请设计一个短链生成系统，类似 t.cn 这样的服务。需求包括： - 生成短链 - 短链跳转原 URL - 支持自定义短链 假设 QPS 约 1 万，写多读少。请从以下几个方面来设计： 1. 数据模型和 API 怎么设计？ 2. QPS 1 万，缓存怎么设计？ 3. 短链生成算法怎么选？ 请详细说明你的设计方案。"},{"turn":15,"tools":[],"thinking":"候选人回答比较简短，需要追问更多细节。根据系统设计题的 follow_up_path，我应该按照步骤来深入追问： 1. 数据模型和 API 怎么设计？ 2. QPS 1 万，缓存怎么设计？ 3. 短链生成算法怎么选？ 候选人的回答比较概括，我需要让他详细展开每个部分。","content":"你的回答比较概括，让我们深入一些： **1. 数据模型和 API 设计** - 具体的表结构是什么样的？需要哪些字段？ - 自定义短链如何处理？如何避免冲突？ - API 的具体参数和返回格式是什么？ **2. 缓存设计** - Redis 缓存什么数据？是全部短链还是只缓存热点？ - 缓存策略是什么？过期时间如何设置？ - 如何处理缓存穿透、击穿、雪崩问题？ **3. 短链生成算法** - 自增 ID 的具体实现方式？数据库自增还是分布式 ID 生成器？ - Base62 编码的具体实现？ - 如何保证生成的短链足够短且不重复？ 请详细说明这些设计细节。"},{"turn":16,"tools":[],"thinking":"候选人回答得比较概括，没有给出具体的实现细节。我需要追问更具体的技术细节，特别是： 1. 数据模型的具体字段和表结构 2. 缓存的具体实现策略 3. 短链生成的具体算法实现 从回答来看，候选人有一些系统设计的基本思路，但缺乏具体的实现细节。我需要引导他给出更具体的答案。","content":"你的回答体现了良好的系统设计思路，但让我们更具体一些： **数据模型设计** - 请给出具体的表结构，包括字段名、类型、索引设计 - 自定义短链如何存储？如何与自动生成的短链区分？ - 是否需要考虑数据分片？如果未来数据量增长，分片策略是什么？ **缓存设计** - Redis 的具体数据结构选择（String、Hash、ZSet等）？ - 缓存命中率的预期是多少？如何监控？ - 缓存更新策略：主动更新还是被动失效？ **短链生成算法** - 自增 ID 的具体实现：数据库自增ID还是分布式ID生成器？ - Base62 编码的具体实现代码？ - 如何保证短链的唯一性和可预测性？ 请给出更具体的技术实现细节。"},{"turn":17,"tools":[],"thinking":"用户回答了缓存设计的问题，提到了： 1. key设计（只存最小字段） 2. 过期策略（比源数据有效期短） 3. 一致性（先写库再删缓存，过期时间兜底） 这个回答相对具体一些，但还可以更深入。我需要继续追问一些细节，特别是关于短链生成算法和具体的技术实现。","content":"你的缓存设计思路很清晰，提到了几个关键点。让我们继续深入： **缓存设计细节** - 具体的key设计是什么样的？比如短链的key格式是什么？ - 缓存过期时间具体设置多少？为什么选择这个时间？ - \"先写库再删缓存\"的顺序是如何保证的？有没有考虑并发问题？ **短链生成算法** - 自增ID的具体实现：是数据库自增ID还是使用其他方式？ - Base62编码的具体实现代码片段？ - 如何处理高并发下的ID生成问题？ **系统扩展性** - 如果QPS增长到10万，你的设计会有什么调整？ - 数据分片策略是什么？按什么字段分片？ 请给出更具体的技术实现细节。"},{"turn":18,"tools":["score_answer"],"thinking":"","content":""},{"turn":19,"tools":["pick_question"],"thinking":"","content":"现在开始HR行为面，首先是自我介绍环节。"},{"turn":20,"tools":[],"thinking":"","content":"请用1分钟介绍你自己，重点说说你最匹配这个岗位的1段经历。"},{"turn":21,"tools":["score_answer"],"thinking":"","content":""},{"turn":22,"tools":["pick_question"],"thinking":"","content":"接下来是动机环节。"},{"turn":23,"tools":[],"thinking":"","content":"你为什么想加入我们公司？"},{"turn":24,"tools":["score_answer"],"thinking":"","content":""},{"turn":25,"tools":["pick_question"],"thinking":"","content":"接下来是压力环节。"},{"turn":26,"tools":[],"thinking":"","content":"你同时被分配了2个紧急任务，PM说都重要，明天都要上线，你怎么办？"},{"turn":27,"tools":["score_answer"],"thinking":"","content":""},{"turn":28,"tools":["pick_question"],"thinking":"","content":"最后是职业规划环节。"},{"turn":29,"tools":[],"thinking":"","content":"未来1-3年你有什么规划？"},{"turn":30,"tools":["score_answer"],"thinking":"","content":""},{"turn":31,"tools":["submit_report"],"thinking":"","content":"现在我来提交面试复盘报告。"},{"turn":32,"tools":["end_interview"],"thinking":"","content":""}],"report":{"overall_score":60,"question_avg":5.14,"track_avg":{"coding":9.0,"project":0.0,"system_design":3.0,"hr":6.0},"radar":{"tech_depth":65,"system_design":55,"project_pitch":40,"coding":85,"behavioral":60,"motivation_fit":55},"verdict":"建议加强项目技术细节和系统设计深度，短期内可投递中小厂，大厂需要更多准备","highlights":["算法题解答思路清晰，代码实现准确","并发安全处理意识较强，了解原子操作","压力应对能力较好，有主动沟通意识"],"weaknesses":["项目深挖回答空泛，缺乏技术细节支撑","系统设计回答过于概括，缺乏具体实现","职业规划缺乏具体路径和内在动机"],"improvements":["加强项目技术细节的梳理和量化数据支撑","系统设计需要更深入的数据模型和API设计","职业规划需要更具体的成长路径和学习计划","提升压测和性能优化经验","加强业务理解和产品思维"],"plan":[{"day":1,"task":"梳理校园二手交易平台的技术细节，准备项目深挖问题"},{"day":2,"task":"学习系统设计方法论，练习数据模型设计"},{"day":3,"task":"完成3个LeetCode medium难度题目"},{"day":4,"task":"研究Redis缓存三大问题的解决方案"},{"day":5,"task":"学习分布式ID生成算法和短链系统设计"},{"day":6,"task":"准备职业规划的具体路径和成长目标"},{"day":7,"task":"模拟面试练习，重点提升项目表达能力"}]},"rounds":[{"id":"lc-200-island-number","track":"coding","question":"岛屿数量","answer":"思路是遍历整个网格，遇到 '1' 就说明发现了一个新岛屿，计数加一，然后从这个点开始做 DFS，把和它相连的所有 '1' 都改成 '0' 标记成已访问，避免重复计数。上下左右四个方向递归。\n\n代码：\n\ndef numIslands(grid):\n    if not grid:\n        return 0\n    m, n = len(grid), len(grid[0])\n    def dfs(i, j):\n        if i < 0 or i >= m or j < 0 or j >= n or grid[i][j] != '1':\n            return\n        grid[i][j] = '0'\n        dfs(i + 1, j); dfs(i - 1, j)\n        dfs(i, j + 1); dfs(i, j - 1)\n    count = 0\n    for i in range(m):\n        for j in range(n):\n            if grid[i][j] == '1':\n                count += 1\n                dfs(i, j)\n    return count\n\n时间复杂度 O(m*n)，最坏空间 O(m*n)（递归栈深度）。如果担心栈溢出可以改成 BFS 用队列。","score":9,"comment":"思路清晰，代码简洁，但未明确处理所有边界情况","source":"llm","dimensions":{"data_structure_choice":1.0,"time_complexity":1.0,"edge_cases":0.4,"code_clarity":1.0},"evidence":["思路是遍历整个网格，遇到 '1' 就说明发现了一个新岛屿，计数加一，然后从这个点开始做 DFS，把和它相连的所有 '1' 都改成 '0' 标记成已访问，避免重复计数。上下左右四个方向递归。","def numIslands(grid):"]},{"id":"custom-01","track":"project","question":"在你的校园二手交易平台项目中，你提到使用Redis缓存热门商品信息，缓存命中率达85%，QPS从200提升到1200。请","answer":"真实数据我没有做过正式压测，只能说个大概：上线之后日活是几百的量级，没出出过明显的性能问题。压测这块是我比较欠缺的，之前没系统地做过，只会用本地的压测工具跑一下接口看响应时间。","score":0,"comment":"回答空泛，未涉及缓存策略、过期更新、三大问题处理等要点","source":"llm","dimensions":{"specificity":0.0,"technical_depth":0.0,"impact":0.0,"reflection":0.0},"evidence":["真实数据我没有做过正式压测","只会用本地的压测工具跑一下接口看响应时间"]},{"id":"sd-short-url","track":"system_design","question":"设计一个短链生成系统","answer":"并发安全我倾向于把「判断」和「修改」合成一个原子操作：能用数据库原子更新的就用 `update ... where` 带条件，Redis 场景就用 Lua 脚本，把查和扣两步合成一次执行，中间不让别的请求插进来。分布式环境下还要加锁，但锁的粒度尽量小，能锁单个 key 就不锁整个资源。","score":3,"comment":"未涉及数据模型和接口设计，权衡分析缺失","source":"llm","dimensions":{"data_model":0.0,"api_design":0.0,"scalability":0.4,"consistency":0.7,"tradeoff_analysis":0.0},"evidence":["并发安全我倾向于把「判断」和「修改」合成一个原子操作：能用数据库原子更新的就用 `update ... where` 带条件，Redis 场景就用 Lua 脚本，把查和扣两步合成一次执行，中间不让别的请求插进来。分布式环境下还要加锁，但锁的粒度尽量小，能锁单个 key 就不锁整个资源。"]},{"id":"hr-self-intro-001","track":"hr","question":"请用 1 分钟介绍你自己，重点说说你最匹配这个岗位的 1 段经历。","answer":"我是XX大学计算机专业大三学生，在校期间做过一个校园二手交易平台，用 Spring Boot + MySQL + Redis，日活 500+。我对后端开发很感兴趣，特别是高并发场景，所以想申请字节后端实习，能在高并发环境下锻炼自己。","score":7,"comment":"结构清晰，匹配点突出，但项目细节不足","source":"llm","dimensions":{"structure":0.7,"highlight_match":0.8,"authenticity":0.6,"time_control":0.7},"evidence":["我是XX大学计算机专业大三学生","在校期间做过一个校园二手交易平台"]},{"id":"hr-motivation-001","track":"hr","question":"你为什么想加入我们公司？","answer":"字节跳动技术氛围好，用户量大，能接触到真正的高并发场景，对我成长帮助大。","score":5,"comment":"回答较笼统，缺乏具体细节和真诚度。","source":"llm","dimensions":{"sincerity":0.4,"depth":0.4,"match":0.7},"evidence":["字节跳动技术氛围好","用户量大"]},{"id":"hr-pressure-deadline-001","track":"hr","question":"你同时被分配了 2 个紧急任务，PM 说都重要，明天都要上线，你怎么办？","answer":"首先我会评估两个任务的工作量和风险，然后找 PM 沟通，说明同时上线的风险，建议按业务优先级排序。如果确实都重要，我会拉上两个 PM 一起对齐优先级，必要时向 leader 求助，确保至少核心功能能按时上线。","score":7,"comment":"回答结构清晰，有主动沟通和求助意识，但未具体说明如何评估风险和优先级。","source":"llm","dimensions":{"stress_resistance":0.7,"analysis":0.7,"communication":0.7,"decision_making":0.7},"evidence":["首先我会评估两个任务的工作量和风险","然后找 PM 沟通，说明同时上线的风险，建议按业务优先级排序"]},{"id":"hr-career-001","track":"hr","question":"未来 1-3 年你有什么规划？","answer":"短期希望深入后端开发，打好基础。中期想往架构方向发展。长期希望能独当一面。","score":5,"comment":"回答简洁但缺乏细节和内在动机","source":"llm","dimensions":{"clarity":0.7,"feasibility":0.4,"motivation":0.4},"evidence":["短期希望深入后端开发，打好基础","中期想往架构方向发展"]}],"labels":{"tools":{"read_resume":"读候选人简历","fetch_jd":"读目标岗位 JD","search_jd_kb":"检索岗位知识库（向量检索）","pick_question":"从题库取一道题","log_custom_question":"登记自拟题（比如项目深挖）","score_answer":"给这一题的回答打分","submit_report":"提交并落盘复盘报告","end_interview":"结束整场面试"},"radar":{"tech_depth":"技术深度","system_design":"系统设计","project_pitch":"项目表达","coding":"算法编码","behavioral":"行为面","motivation_fit":"动机匹配"},"track":{"coding":"算法题","system_design":"系统设计","project":"项目深挖","hr":"HR 行为面"},"dim":{"data_structure_choice":"结构选型","time_complexity":"复杂度","edge_cases":"边界条件","code_clarity":"代码清晰度","correctness":"思路正确","complexity":"复杂度","data_model":"数据模型","api_design":"接口设计","scalability":"可扩展性","consistency":"一致性","tradeoff_analysis":"权衡取舍","completeness":"方案完整度","specificity":"具体程度","technical_depth":"技术深度","impact":"结果说明","reflection":"反思意识","structure":"条理性","highlight_match":"亮点匹配","authenticity":"真实度","time_control":"信息密度","sincerity":"真诚度","depth":"思考深度","match":"岗位契合","stress_resistance":"情绪稳定","analysis":"分析能力","communication":"表达清晰","decision_making":"决策执行","clarity":"表达条理","feasibility":"计划可行性","motivation":"内在动机","relevance":"切题程度","substance":"实质信息","fit":"岗位匹配"}}}</script>
+<script>
+(function(){
+  var DATA = JSON.parse(document.getElementById("payload").textContent);
+  var L = DATA.labels, S = DATA.summary, T = DATA.turns;
+  var cur = 0, timer = null;
+
+  var esc = function(s){
+    return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  };
+  var num = function(v){ return v == null ? "—" : String(Math.round(v)); };
+  var scoreClass = function(v){ return v >= 7 ? "s7" : (v >= 4 ? "s5" : "s0"); };
+
+  document.getElementById("meta").textContent =
+    "候选人 " + (DATA.meta.candidate || "?") + " · 目标 " + (DATA.meta.role || "?") +
+    " · 面试日期 " + (DATA.meta.date || "?") + " · 生成于 " + DATA.meta.built_at;
+
+  var stats = [
+    ["总轮数", S.turns, ""],
+    ["工具调用", S.tool_calls, "次"],
+    ["出题数量", S.questions_asked, "题"],
+    ["逐题评分", S.answers_scored, "题"],
+    ["LLM 评分占比", (S.answers_scored ? Math.round(S.scored_by_llm / S.answers_scored * 100) : 0), "%"],
+    ["逐题均分", S.avg_score, "/ 10"],
+    ["耗时", S.elapsed_sec, "秒"],
+    ["LLM 调用", S.llm_calls, "次"]
+  ];
+  document.getElementById("stats").innerHTML = stats.map(function(r){
+    return '<div class="stat"><div class="k">' + esc(r[0]) + '</div><div class="v">' +
+      esc(r[1]) + (r[2] ? '<span class="u"> ' + esc(r[2]) + '</span>' : '') + '</div></div>';
+  }).join("");
+
+  var strip = document.getElementById("strip");
+  T.forEach(function(t, i){
+    var b = document.createElement("button");
+    b.className = "tick" + (t.tools.length ? " tool" : "") +
+      (t.tools.indexOf("end_interview") >= 0 ? " end" : "");
+    b.title = "第 " + t.turn + " 轮" + (t.tools.length ? " · " + t.tools.join(", ") : " · 纯对话");
+    b.textContent = t.turn;
+    b.onclick = function(){ cur = i; render(); };
+    strip.appendChild(b);
+  });
+
+  function render(){
+    var t = T[cur];
+    for (var i = 0; i < strip.children.length; i++){
+      strip.children[i].classList.toggle("on", i === cur);
+    }
+    document.getElementById("pos").textContent = "第 " + t.turn + " / " + T.length + " 轮";
+
+    var toolsHtml = t.tools.length
+      ? t.tools.map(function(n){
+          var note = L.tools[n] ? ' <span class="dim">· ' + esc(L.tools[n]) + "</span>" : "";
+          return '<span class="chip">' + esc(n) + "()</span>" + note;
+        }).join("<br>")
+      : '<span class="chip plain">本轮没有工具调用</span>';
+
+    var thinking = t.thinking
+      ? esc(t.thinking)
+      : '<span class="dim">（轨迹里这一轮没有推理文本 —— 模型直接发起了工具调用）</span>';
+    var content = t.content
+      ? esc(t.content)
+      : '<span class="dim">（这一轮模型没有输出对话文本）</span>';
+
+    document.getElementById("detail").innerHTML =
+      '<h3>第 ' + t.turn + ' 轮</h3>' +
+      '<div style="margin:.5rem 0 .25rem">' + toolsHtml + '</div>' +
+      '<div class="lbl">模型推理（thinking）</div>' +
+      '<div class="quote small">' + thinking + '</div>' +
+      '<div class="lbl">面试官对候选人说的话</div>' +
+      '<div class="quote small">' + content + '</div>';
+  }
+
+  document.getElementById("prev").onclick = function(){ cur = (cur > 0 ? cur - 1 : T.length - 1); render(); };
+  document.getElementById("next").onclick = function(){ cur = (cur < T.length - 1 ? cur + 1 : 0); render(); };
+
+  var playBtn = document.getElementById("play");
+  playBtn.onclick = function(){
+    if (timer){ clearInterval(timer); timer = null; playBtn.textContent = "播放"; return; }
+    playBtn.textContent = "暂停";
+    timer = setInterval(function(){
+      if (cur >= T.length - 1){ clearInterval(timer); timer = null; playBtn.textContent = "播放"; return; }
+      cur++; render();
+    }, 900);
+  };
+
+  document.addEventListener("keydown", function(e){
+    if (e.key === "ArrowLeft"){ cur = cur > 0 ? cur - 1 : T.length - 1; render(); }
+    if (e.key === "ArrowRight"){ cur = cur < T.length - 1 ? cur + 1 : 0; render(); }
+  });
+
+  var R = DATA.report;
+  document.getElementById("overall").innerHTML = num(R.overall_score) + '<span class="u"> / 100</span>';
+  document.getElementById("avg").innerHTML = (R.question_avg == null ? "—" : R.question_avg) + '<span class="u"> / 10</span>';
+
+  var anchorDiff = (R.overall_score != null && R.question_avg != null)
+    ? Math.abs(R.overall_score - R.question_avg * 10) : null;
+  document.getElementById("anchor-note").textContent = anchorDiff == null
+    ? ""
+    : (anchorDiff <= 10
+        ? "两者自洽（相差 " + Math.round(anchorDiff) + " 分）—— 模型填的总体分有逐题数据支撑。"
+        : "⚠ 两者相差 " + Math.round(anchorDiff) + " 分，说明模型填的总体分与逐题表现不一致 —— 这个提示是系统自动算的，不是模型自说自话。");
+
+  document.getElementById("verdict").textContent = R.verdict;
+  document.getElementById("highlights").innerHTML = R.highlights.map(function(s){ return "<li>" + esc(s) + "</li>"; }).join("") || "<li class='dim'>（无）</li>";
+  document.getElementById("weaknesses").innerHTML = R.weaknesses.map(function(s){ return "<li>" + esc(s) + "</li>"; }).join("") || "<li class='dim'>（无）</li>";
+  document.getElementById("improvements").innerHTML = R.improvements.map(function(s){ return "<li>" + esc(s) + "</li>"; }).join("") || "<li class='dim'>（无）</li>";
+  document.getElementById("plan").innerHTML = R.plan.map(function(d){
+    return "<li><b>第 " + esc(d.day) + " 天</b> " + esc(d.task) + "</li>";
+  }).join("") || "<li class='dim'>（无）</li>";
+
+  var NS = "http://www.w3.org/2000/svg";
+  (function drawRadar(){
+    var keys = Object.keys(R.radar);
+    // ★ 画布尺寸不能太小：六个标签是环状排布的，左右两侧的标签会向外伸出
+    //   （"系统设计 55" 这种一个就有 60px 宽）。第一版画布 250px 直接把两侧
+    //   标签裁成了"系统设"—— SVG 默认会按视口裁切，不会自动留白。
+    var W = 340, H = 290, cx = W / 2, cy = H / 2 - 3, rad = 76;
+    var svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "六维能力雷达图");
+
+    var pt = function(i, r){
+      var ang = -Math.PI / 2 + i * 2 * Math.PI / keys.length;
+      return [cx + Math.cos(ang) * r, cy + Math.sin(ang) * r];
+    };
+
+    [0.25, 0.5, 0.75, 1].forEach(function(f){
+      var pts = keys.map(function(_, i){ var p = pt(i, rad * f); return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" ");
+      var poly = document.createElementNS(NS, "polygon");
+      poly.setAttribute("points", pts);
+      poly.setAttribute("fill", "none");
+      poly.setAttribute("stroke", "currentColor");
+      poly.setAttribute("stroke-opacity", "0.18");
+      svg.appendChild(poly);
+    });
+
+    keys.forEach(function(_, i){
+      var p = pt(i, rad);
+      var ln = document.createElementNS(NS, "line");
+      ln.setAttribute("x1", cx); ln.setAttribute("y1", cy);
+      ln.setAttribute("x2", p[0]); ln.setAttribute("y2", p[1]);
+      ln.setAttribute("stroke", "currentColor");
+      ln.setAttribute("stroke-opacity", "0.18");
+      svg.appendChild(ln);
+    });
+
+    var shape = keys.map(function(k, i){
+      var p = pt(i, rad * Math.max(0, Math.min(100, R.radar[k])) / 100);
+      return p[0].toFixed(1) + "," + p[1].toFixed(1);
+    }).join(" ");
+    var poly = document.createElementNS(NS, "polygon");
+    poly.setAttribute("points", shape);
+    // 用 style 而不是 fill/stroke 属性写 CSS 变量：SVG 表现属性对 var() 的支持
+    // 各浏览器不完全一致，走 CSS 更稳。
+    poly.setAttribute("style", "fill:var(--accent);fill-opacity:.22;stroke:var(--accent);stroke-width:2");
+    svg.appendChild(poly);
+
+    keys.forEach(function(k, i){
+      var p = pt(i, rad + 18);
+      var t = document.createElementNS(NS, "text");
+      t.setAttribute("x", p[0]); t.setAttribute("y", p[1]);
+      t.setAttribute("text-anchor", p[0] < cx - 4 ? "end" : (p[0] > cx + 4 ? "start" : "middle"));
+      t.setAttribute("dominant-baseline", "middle");
+      t.setAttribute("font-size", "11.5");
+      t.setAttribute("fill", "currentColor");
+      t.textContent = (L.radar[k] || k) + " " + num(R.radar[k]);
+      svg.appendChild(t);
+    });
+
+    document.getElementById("radar").appendChild(svg);
+  })();
+
+  document.getElementById("rounds").innerHTML = DATA.rounds.map(function(r, i){
+    var dims = Object.keys(r.dimensions).map(function(k){
+      var v = r.dimensions[k];
+      return '<div style="display:flex;align-items:center;gap:8px;margin:.25rem 0">' +
+        '<span class="small" style="width:88px;color:var(--fg2)">' + esc(L.dim[k] || k) + "</span>" +
+        '<span class="bar" style="flex:1 1 auto"><i style="width:' + Math.round(Math.max(0, Math.min(1, v)) * 100) + '%"></i></span>' +
+        '<span class="small mono dim" style="width:30px;text-align:right">' + Number(v).toFixed(2) + "</span></div>";
+    }).join("") || '<span class="dim small">（这一题走了规则降级，没有维度分）</span>';
+
+    var ev = r.evidence.length
+      ? "<div class='lbl'>判分依据（回答原文）</div>" + r.evidence.map(function(e){
+          return "<div class='quote small dim'>" + esc(e) + "</div>";
+        }).join("")
+      : "";
+
+    var srcTag = r.source === "llm"
+      ? '<span class="chip">LLM 评分</span>'
+      : '<span class="chip plain">规则降级</span>';
+
+    return '<div class="card" style="margin-bottom:10px">' +
+      '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">' +
+        '<b style="font-size:14px">' + esc(r.question) + "</b>" +
+        '<span class="small dim">' + esc(L.track[r.track] || r.track) + "</span>" + srcTag +
+        '<span style="margin-left:auto" class="scorebad ' + scoreClass(r.score) + '">' + num(r.score) + '<span class="small muted"> / 10</span></span>' +
+      "</div>" +
+      '<p class="small" style="margin:.5rem 0">' + esc(r.comment) + "</p>" +
+      '<details><summary class="small muted" style="cursor:pointer">展开维度得分与判分依据</summary>' +
+        '<div style="margin-top:.6rem">' + dims + "</div>" +
+        '<div class="lbl">候选人回答（截断）</div>' +
+        '<div class="quote small dim">' + esc(r.answer.slice(0, 420)) + (r.answer.length > 420 ? " …" : "") + "</div>" +
+        ev +
+      "</details></div>";
+  }).join("");
+
+  document.getElementById("footer").innerHTML =
+    "本页由 <code>python tools/build_replay.py</code> 从 <code>docs/examples/" +
+    esc(DATA.meta.trace_file) + "</code> 与 <code>" + esc(DATA.meta.report_file) +
+    "</code> 生成，数据未做任何手工修改 —— 可重新生成后逐字节核对。<br>" +
+    "报告由 " + esc(DATA.meta.generated_by || "orchestrator") + " 落盘。";
+
+  render();
+})();
+</script>
+</body>
+</html>

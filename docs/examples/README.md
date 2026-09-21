@@ -6,7 +6,17 @@
 | 文件 | 是什么 |
 |---|---|
 | `run14_trace.json` | 决策轨迹。包含本次运行的 `summary` 和逐轮的 `thinking` / `content` / `tool_calls` |
-| `run14_report.md` | 本次运行最终落盘的复盘报告（含逐题评分明细） |
+| `run14_report.json` | 本次运行落盘的复盘报告（结构化，`docs/replay/` 的雷达图与逐题明细读它） |
+| `run14_report.md` | 同一份报告的 markdown 版本（给人读的） |
+
+这两份 JSON 还有第二个用途：**[运行回放页](../replay/index.html) 就是由它们生成的**。
+
+```bash
+python tools/build_replay.py    # 读上面两个文件 → 生成 docs/replay/index.html
+```
+
+所以回放页里的每一个数字、每一句话都能追溯到这两个文件；
+重新生成一份与仓库里的比对，就能确认页面没有被手工美化过。
 
 **这次运行的条件**
 

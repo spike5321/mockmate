@@ -1,0 +1,218 @@
+{
+  "candidate": "Zhang San",
+  "target_role": "后端开发实习生",
+  "target_company": "字节跳动 / 腾讯",
+  "interview_date": "2026-09-21 20:11",
+  "overall_score": 60,
+  "question_avg": 5.14,
+  "track_avg": {
+    "coding": 9.0,
+    "project": 0.0,
+    "system_design": 3.0,
+    "hr": 6.0
+  },
+  "radar": {
+    "tech_depth": 65,
+    "system_design": 55,
+    "project_pitch": 40,
+    "coding": 85,
+    "behavioral": 60,
+    "motivation_fit": 55
+  },
+  "highlights": [
+    "算法题解答思路清晰，代码实现准确",
+    "并发安全处理意识较强，了解原子操作",
+    "压力应对能力较好，有主动沟通意识"
+  ],
+  "weaknesses": [
+    "项目深挖回答空泛，缺乏技术细节支撑",
+    "系统设计回答过于概括，缺乏具体实现",
+    "职业规划缺乏具体路径和内在动机"
+  ],
+  "improvements": [
+    "加强项目技术细节的梳理和量化数据支撑",
+    "系统设计需要更深入的数据模型和API设计",
+    "职业规划需要更具体的成长路径和学习计划",
+    "提升压测和性能优化经验",
+    "加强业务理解和产品思维"
+  ],
+  "next_7_days_plan": [
+    {
+      "day": 1,
+      "task": "梳理校园二手交易平台的技术细节，准备项目深挖问题"
+    },
+    {
+      "day": 2,
+      "task": "学习系统设计方法论，练习数据模型设计"
+    },
+    {
+      "day": 3,
+      "task": "完成3个LeetCode medium难度题目"
+    },
+    {
+      "day": 4,
+      "task": "研究Redis缓存三大问题的解决方案"
+    },
+    {
+      "day": 5,
+      "task": "学习分布式ID生成算法和短链系统设计"
+    },
+    {
+      "day": 6,
+      "task": "准备职业规划的具体路径和成长目标"
+    },
+    {
+      "day": 7,
+      "task": "模拟面试练习，重点提升项目表达能力"
+    }
+  ],
+  "verdict": "建议加强项目技术细节和系统设计深度，短期内可投递中小厂，大厂需要更多准备",
+  "rounds": [
+    {
+      "question_id": "lc-200-island-number",
+      "track": "coding",
+      "stage": null,
+      "question": "岛屿数量",
+      "answer": "思路是遍历整个网格，遇到 '1' 就说明发现了一个新岛屿，计数加一，然后从这个点开始做 DFS，把和它相连的所有 '1' 都改成 '0' 标记成已访问，避免重复计数。上下左右四个方向递归。\n\n代码：\n\ndef numIslands(grid):\n    if not grid:\n        return 0\n    m, n = len(grid), len(grid[0])\n    def dfs(i, j):\n        if i < 0 or i >= m or j < 0 or j >= n or grid[i][j] != '1':\n            return\n        grid[i][j] = '0'\n        dfs(i + 1, j); dfs(i - 1, j)\n        dfs(i, j + 1); dfs(i, j - 1)\n    count = 0\n    for i in range(m):\n        for j in range(n):\n            if grid[i][j] == '1':\n                count += 1\n                dfs(i, j)\n    return count\n\n时间复杂度 O(m*n)，最坏空间 O(m*n)（递归栈深度）。如果担心栈溢出可以改成 BFS 用队列。",
+      "score": 9,
+      "comment": "思路清晰，代码简洁，但未明确处理所有边界情况",
+      "dimensions": {
+        "data_structure_choice": 1.0,
+        "time_complexity": 1.0,
+        "edge_cases": 0.4,
+        "code_clarity": 1.0
+      },
+      "source": "llm",
+      "evidence_refs": [
+        "思路是遍历整个网格，遇到 '1' 就说明发现了一个新岛屿，计数加一，然后从这个点开始做 DFS，把和它相连的所有 '1' 都改成 '0' 标记成已访问，避免重复计数。上下左右四个方向递归。",
+        "def numIslands(grid):",
+        "if not grid:",
+        "return 0"
+      ]
+    },
+    {
+      "question_id": "custom-01",
+      "track": "project",
+      "stage": null,
+      "question": "在你的校园二手交易平台项目中，你提到使用Redis缓存热门商品信息，缓存命中率达85%，QPS从200提升到1200。请",
+      "answer": "真实数据我没有做过正式压测，只能说个大概：上线之后日活是几百的量级，没出出过明显的性能问题。压测这块是我比较欠缺的，之前没系统地做过，只会用本地的压测工具跑一下接口看响应时间。",
+      "score": 0,
+      "comment": "回答空泛，未涉及缓存策略、过期更新、三大问题处理等要点",
+      "dimensions": {
+        "specificity": 0.0,
+        "technical_depth": 0.0,
+        "impact": 0.0,
+        "reflection": 0.0
+      },
+      "source": "llm",
+      "evidence_refs": [
+        "真实数据我没有做过正式压测",
+        "只会用本地的压测工具跑一下接口看响应时间"
+      ]
+    },
+    {
+      "question_id": "sd-short-url",
+      "track": "system_design",
+      "stage": null,
+      "question": "设计一个短链生成系统",
+      "answer": "并发安全我倾向于把「判断」和「修改」合成一个原子操作：能用数据库原子更新的就用 `update ... where` 带条件，Redis 场景就用 Lua 脚本，把查和扣两步合成一次执行，中间不让别的请求插进来。分布式环境下还要加锁，但锁的粒度尽量小，能锁单个 key 就不锁整个资源。",
+      "score": 3,
+      "comment": "未涉及数据模型和接口设计，权衡分析缺失",
+      "dimensions": {
+        "data_model": 0.0,
+        "api_design": 0.0,
+        "scalability": 0.4,
+        "consistency": 0.7,
+        "tradeoff_analysis": 0.0
+      },
+      "source": "llm",
+      "evidence_refs": [
+        "并发安全我倾向于把「判断」和「修改」合成一个原子操作：能用数据库原子更新的就用 `update ... where` 带条件，Redis 场景就用 Lua 脚本，把查和扣两步合成一次执行，中间不让别的请求插进来。分布式环境下还要加锁，但锁的粒度尽量小，能锁单个 key 就不锁整个资源。"
+      ]
+    },
+    {
+      "question_id": "hr-self-intro-001",
+      "track": "hr",
+      "stage": "self_intro",
+      "question": "请用 1 分钟介绍你自己，重点说说你最匹配这个岗位的 1 段经历。",
+      "answer": "我是XX大学计算机专业大三学生，在校期间做过一个校园二手交易平台，用 Spring Boot + MySQL + Redis，日活 500+。我对后端开发很感兴趣，特别是高并发场景，所以想申请字节后端实习，能在高并发环境下锻炼自己。",
+      "score": 7,
+      "comment": "结构清晰，匹配点突出，但项目细节不足",
+      "dimensions": {
+        "structure": 0.7,
+        "highlight_match": 0.8,
+        "authenticity": 0.6,
+        "time_control": 0.7
+      },
+      "source": "llm",
+      "evidence_refs": [
+        "我是XX大学计算机专业大三学生",
+        "在校期间做过一个校园二手交易平台",
+        "我对后端开发很感兴趣，特别是高并发场景"
+      ]
+    },
+    {
+      "question_id": "hr-motivation-001",
+      "track": "hr",
+      "stage": "motivation",
+      "question": "你为什么想加入我们公司？",
+      "answer": "字节跳动技术氛围好，用户量大，能接触到真正的高并发场景，对我成长帮助大。",
+      "score": 5,
+      "comment": "回答较笼统，缺乏具体细节和真诚度。",
+      "dimensions": {
+        "sincerity": 0.4,
+        "depth": 0.4,
+        "match": 0.7
+      },
+      "source": "llm",
+      "evidence_refs": [
+        "字节跳动技术氛围好",
+        "用户量大",
+        "能接触到真正的高并发场景",
+        "对我成长帮助大"
+      ]
+    },
+    {
+      "question_id": "hr-pressure-deadline-001",
+      "track": "hr",
+      "stage": null,
+      "question": "你同时被分配了 2 个紧急任务，PM 说都重要，明天都要上线，你怎么办？",
+      "answer": "首先我会评估两个任务的工作量和风险，然后找 PM 沟通，说明同时上线的风险，建议按业务优先级排序。如果确实都重要，我会拉上两个 PM 一起对齐优先级，必要时向 leader 求助，确保至少核心功能能按时上线。",
+      "score": 7,
+      "comment": "回答结构清晰，有主动沟通和求助意识，但未具体说明如何评估风险和优先级。",
+      "dimensions": {
+        "stress_resistance": 0.7,
+        "analysis": 0.7,
+        "communication": 0.7,
+        "decision_making": 0.7
+      },
+      "source": "llm",
+      "evidence_refs": [
+        "首先我会评估两个任务的工作量和风险",
+        "然后找 PM 沟通，说明同时上线的风险，建议按业务优先级排序",
+        "如果确实都重要，我会拉上两个 PM 一起对齐优先级，必要时向 leader 求助，确保至少核心功能能按时上线"
+      ]
+    },
+    {
+      "question_id": "hr-career-001",
+      "track": "hr",
+      "stage": "career_plan",
+      "question": "未来 1-3 年你有什么规划？",
+      "answer": "短期希望深入后端开发，打好基础。中期想往架构方向发展。长期希望能独当一面。",
+      "score": 5,
+      "comment": "回答简洁但缺乏细节和内在动机",
+      "dimensions": {
+        "clarity": 0.7,
+        "feasibility": 0.4,
+        "motivation": 0.4
+      },
+      "source": "llm",
+      "evidence_refs": [
+        "短期希望深入后端开发，打好基础",
+        "中期想往架构方向发展",
+        "长期希望能独当一面"
+      ]
+    }
+  ],
+  "generated_by": "orchestrator (自研调度循环)"
+}

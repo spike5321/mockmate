@@ -237,6 +237,24 @@ score_answer(question_id, answer)
 | 检索条数、相似度 | `kb/search.py` |
 | 语料 | `knowledge/*.md` → 改完跑 `python -m kb.build --rebuild` |
 | 报告长什么样 | `tools/mock_tools.py`（`_render_markdown_report`） |
+| 运行回放页长什么样 | `tools/build_replay.py` → 改完跑 `python tools/build_replay.py` 重新生成 |
+
+### 运行回放页怎么来的
+
+`docs/replay/index.html` 是**构建产物**，不是手写的 HTML：
+
+```
+docs/examples/run14_trace.json  ─┐
+                                 ├─→ python tools/build_replay.py ─→ docs/replay/index.html
+docs/examples/run14_report.json ─┘
+```
+
+两点设计考虑：
+
+- **数据内联进 HTML**，不用 `fetch`。浏览器对本地文件（`file://`）的 fetch 有跨域限制，
+  外链数据的话双击打开就是白屏。内联之后这一页是单文件：能双击、能邮件发、能丢进任何静态托管。
+- **页面是产物而不是手抄的**，所以"这些数据是不是编的"这个问题可以被验证 ——
+  重新生成一份、逐字节比对即可。手写的 HTML 做不到这一点。
 
 ### 改完怎么验证
 

@@ -5,7 +5,17 @@
 > 这是一个**自研的 LLM Agent 调度循环**：模型自己决定下一步做什么——读简历、检索岗位情报、出题、追问、打分、交报告、结束，
 > 循环什么时候停也由它判断。**决策循环是这个仓库自己写的代码，不依赖任何 Agent 框架。**
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/offline%20self--check-e2e__test.py-lightgrey)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-117%20passed-brightgreen)
+
+### ▶ 先看这个：一次真实运行的完整回放
+
+**[打开运行回放页](https://spike5321.github.io/mockmate/replay/)** · 32 轮决策轨迹，一轮一轮看**模型为什么决定调那个工具**。
+
+<img src="docs/replay/preview.png" alt="MockMate 运行回放页：决策密度条与逐轮推理" width="820">
+
+> 回放页是**单文件静态 HTML**（无构建、无依赖、不发网络请求）。Pages 还没开的话，
+> 直接下载 [`docs/replay/index.html`](docs/replay/index.html) 双击打开就行；
+> 也可以跑 `python tools/build_replay.py` 从轨迹文件重新生成一份来核对。
 
 ---
 
@@ -100,7 +110,7 @@ flowchart TD
 ## 3. 实测结果
 
 下面是一次完整运行的真实数据（`glm-4.5-air` 当面试官 + `glm-4-flash-250414` 当评分官）。
-证据文件在 [`docs/examples/`](docs/examples/)：决策轨迹 + 完整报告都在里面。
+证据文件在 [`docs/examples/`](docs/examples/)：决策轨迹 + 完整报告都在里面；**逐轮回放见[运行回放页](docs/replay/index.html)**。
 
 | 指标 | 值 |
 |---|---|
@@ -333,8 +343,10 @@ mockmate/
 ├── knowledge/                   # 面试情报语料（4 篇 markdown）
 ├── scenarios/                   # 场景数据：简历 + JD + 题库 + 候选人脚本
 ├── tools/mock_tools.py          # 场景加载 + markdown 报告渲染
+├── tools/build_replay.py        # 从轨迹 + 报告生成运行回放页（单文件 HTML）
 ├── docs/
 │   ├── architecture.md          # 架构说明
+│   ├── replay/index.html        # ★ 运行回放页（构建产物，可直接双击打开）
 │   └── examples/                # 一次真实运行的轨迹与报告（可审计）
 ├── traces/                      # 每次运行的决策轨迹（gitignore，本地生成）
 └── e2e_test.py                  # 离线工具自检
@@ -354,7 +366,8 @@ mockmate/
 诚实地列出来，比藏着好：
 
 - **候选人不是 LLM**，是脚本模拟的。这是刻意的（保证可复现、可离线、不烧人工），但意味着"对话的另一半"不是 Agent。
-- **没有 Web 界面**，只有命令行。面试过程是流式打印在终端里的。
+- **没有实时 Web 界面**，只有命令行。面试过程是流式打印在终端里的。
+  运行回放页（`docs/replay/`）是**事后播放一份静态轨迹**，不是实时界面 —— 真正的 Web 界面在路线图阶段 6。
 - **免费模型在晚高峰会被平台级限流**。调试时不要背靠背连续跑整轮面试，中间留几十秒。
 - **知识库很小**：4 篇语料、33 个片段。向量检索用的是智谱 `embedding-3`（2048 维），
   没有本地兜底——换 embedding 模型必须 `python -m kb.build --rebuild`（维度不同不能混库）。
@@ -372,7 +385,9 @@ mockmate/
   - [x] README 重写 + mermaid 架构图 + 实测数据（取自 `traces/`，可审计）
   - [x] `docs/architecture.md` 重写为可上手版本
   - [x] pytest 单测 117 项（离线、不花额度）
-  - [ ] Demo 录屏（终端跑一场真实面试）
+  - [x] **运行回放页**（`docs/replay/`，单文件静态 HTML，由轨迹生成）
+  - [ ] Demo 录屏 GIF（可选，回放页已覆盖大部分需求）
+  - [ ] 开启 GitHub Pages（Settings → Pages → Source: `main` / `docs`）
   - [ ] 旧目录归档到 `legacy/`、`.mailmap` 修贡献图
 - [ ] **阶段 5** 多模型路由：模型切换 + 限流时中断询问用户 + checkpoint 断点续跑；本地 embedding 兜底；向量 + BM25 混合检索
 - [ ] **阶段 6** Web 界面（Streamlit）：侧栏选模型、填 Key、实时看面试过程
