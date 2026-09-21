@@ -17,3 +17,14 @@ Thumbs.db
 *.log
 *.tmp
 style_preview/
+
+# 密钥与本地配置（绝对不能提交）
+.env
+.env.local
+
+# 每次运行都会重新生成的报告产物（保持工作区干净）
+scenarios/*.report.json
+scenarios/*.report.md
+
+# Agent 运行轨迹
+traces/

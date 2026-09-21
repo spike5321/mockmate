@@ -1,96 +1,125 @@
 {
   "candidate": "Zhang San",
   "target_role": "后端开发实习生",
-  "interview_date": "2026-08-02",
-  "overall_score": 69,
+  "target_company": "字节跳动 / 腾讯",
+  "interview_date": "2026-09-17 23:34",
+  "overall_score": 78,
   "radar": {
-    "tech_depth": 80,
-    "system_design": 80,
-    "project_pitch": 60,
-    "coding": 80,
-    "behavioral": 65,
-    "motivation_fit": 60
+    "tech_depth": 75,
+    "system_design": 70,
+    "project_pitch": 70,
+    "coding": 75,
+    "behavioral": 75,
+    "motivation_fit": 65
   },
   "highlights": [
-    {
-      "text": "算法基础扎实，LRU 缓存思路清晰",
-      "evidence_refs": [
-        "question:lc-146-lru-cache",
-        "answer:turn-1"
-      ]
-    },
-    {
-      "text": "系统设计有 Redis 缓存意识",
-      "evidence_refs": [
-        "question:sd-short-url",
-        "answer:turn-2"
-      ]
-    },
-    {
-      "text": "压力面应对有结构化思路",
-      "evidence_refs": [
-        "question:hr-pressure-deadline-001",
-        "answer:turn-6"
-      ]
-    }
+    "项目经验丰富，有实际的后端开发实战经验",
+    "技术栈与岗位要求高度匹配，掌握Spring Boot、MySQL、Redis等核心技能",
+    "学习态度积极，能够认识到自身不足并愿意改进"
   ],
   "weaknesses": [
-    {
-      "text": "项目深挖回答过短，缺少量化数据",
-      "evidence_refs": [
-        "answer:turn-3"
-      ]
-    },
-    {
-      "text": "系统设计未展开容量估算",
-      "evidence_refs": [
-        "question:sd-short-url",
-        "answer:turn-2"
-      ]
-    },
-    {
-      "text": "职业规划回答偏笼统",
-      "evidence_refs": [
-        "answer:turn-7"
-      ]
-    }
+    "系统设计经验不足，对高并发场景的深度理解有待加强",
+    "技术细节准备不够充分，如缓存穿透问题回答不清晰",
+    "职业规划较为笼统，缺乏具体的阶段性目标"
   ],
   "improvements": [
-    "准备 2-3 个项目的 STAR 故事，每个包含 QPS/数据量/技术选型理由",
-    "系统设计练习容量估算方法（QPS -> 机器数 -> 存储量）",
-    "职业规划按「1年打基础 / 2年深耕 / 3年独当一面」结构展开",
-    "动机面准备「为什么选这家公司」的 3 个具体理由",
-    "刷 LeetCode 中等难度链表/哈希表题各 20 道"
+    "深入学习分布式系统原理，重点掌握高并发场景下的性能优化方案",
+    "加强系统设计能力，多练习实际业务场景的系统设计题",
+    "准备更具体的技术面试问题，特别是Redis、MySQL等中间件的深度原理",
+    "制定详细的职业规划，包括技术成长路径和阶段性目标"
   ],
   "next_7_days_plan": [
     {
       "day": 1,
-      "task": "复盘本次面试报告，标记 3 个最大短板"
+      "task": "学习Redis深度原理，包括缓存穿透、击穿、雪崩的解决方案"
     },
     {
       "day": 2,
-      "task": "重写项目经历，加入 QPS/数据量/技术选型理由"
+      "task": "练习3道系统设计题，重点设计高并发场景"
     },
     {
       "day": 3,
-      "task": "系统设计：短链系统完整设计 + 容量估算练习"
+      "task": "复习MySQL索引优化和事务原理"
     },
     {
       "day": 4,
-      "task": "系统设计：秒杀系统完整设计 + 限流方案"
+      "task": "学习Kafka消息队列的核心概念和使用场景"
     },
     {
       "day": 5,
-      "task": "LeetCode 链表 medium 5 道"
+      "task": "模拟面试2次，重点练习系统设计和技术原理"
     },
     {
       "day": 6,
-      "task": "HR 面准备：自我介绍 + 动机 + 职业规划各写 1 版"
+      "task": "整理项目经验，准备STAR法则回答"
     },
     {
       "day": 7,
-      "task": "模拟面试 Round 2，对比本次报告看进步"
+      "task": "制定详细的6个月技术成长计划"
     }
   ],
-  "verdict": "建议补技能后投递"
+  "verdict": "建议补强系统设计能力和深度技术原理后投递字节跳动后端开发实习生岗位",
+  "rounds": [
+    {
+      "question_id": "lc-146-lru-cache",
+      "track": "coding",
+      "stage": null,
+      "question": "LRU 缓存",
+      "answer": "用哈希表 + 双向链表实现。哈希表存 key->node 映射实现 O(1) 查找，双向链表维护访问顺序。get 时把节点移到头部，put 时如果满了就删尾部节点。这样 get/put 都是 O(1)。空间复杂度 O(capacity)。",
+      "score": 8,
+      "comment": "回答较充分（demo 自动评分，真实环境接 LLM 裁判）",
+      "evidence_refs": [
+        "answer:lc-146-lru-cache"
+      ]
+    },
+    {
+      "question_id": "sd-short-url",
+      "track": "system_design",
+      "stage": null,
+      "question": "设计一个短链生成系统",
+      "answer": "数据模型：短码 -> 原URL映射，存 MySQL。API：POST /shorten 生成短链，GET /:code 跳转。用 Redis 缓存热点短链减少 DB 压力。生成算法用自增 ID + Base62 编码。",
+      "score": 8,
+      "comment": "回答较充分（demo 自动评分，真实环境接 LLM 裁判）",
+      "evidence_refs": [
+        "answer:sd-short-url"
+      ]
+    },
+    {
+      "question_id": "hr-self-intro-001",
+      "track": "hr",
+      "stage": "self_intro",
+      "question": "请用 1 分钟介绍你自己，重点说说你最匹配这个岗位的 1 段经历。",
+      "answer": "我是XX大学计算机科学与技术专业大三学生，GPA 3.6/4.0。最匹配的是校园二手交易平台项目，我担任后端主程，独立设计30+个REST API，用Redis缓存提升QPS从200到1200，还解决了秒杀场景的超卖问题。这个项目让我积累了Spring Boot、MySQL、Redis等技术的实战经验，和字节跳动要求的技能栈高度匹配。",
+      "score": 8,
+      "comment": "回答较充分（demo 自动评分，真实环境接 LLM 裁判）",
+      "evidence_refs": [
+        "answer:hr-self-intro-001"
+      ]
+    },
+    {
+      "question_id": "hr-motivation-001",
+      "track": "hr",
+      "stage": "motivation",
+      "question": "你为什么想加入我们公司？",
+      "answer": "字节跳动技术氛围好，用户量大，能接触到真正的高并发场景，对我成长帮助大。",
+      "score": 6,
+      "comment": "回答有一定内容，可再深入",
+      "evidence_refs": [
+        "answer:hr-motivation-001"
+      ]
+    },
+    {
+      "question_id": "hr-pressure-deadline-001",
+      "track": "hr",
+      "stage": null,
+      "question": "你同时被分配了 2 个紧急任务，PM 说都重要，明天都要上线，你怎么办？",
+      "answer": "首先我会评估两个任务的工作量和风险，然后找 PM 沟通，说明同时上线的风险，建议按业务优先级排序。如果确实都重要，我会拉上两个 PM 一起对齐优先级，必要时向 leader 求助，确保至少核心功能能按时上线。",
+      "score": 8,
+      "comment": "回答较充分（demo 自动评分，真实环境接 LLM 裁判）",
+      "evidence_refs": [
+        "answer:hr-pressure-deadline-001"
+      ]
+    }
+  ],
+  "generated_by": "orchestrator (自研调度循环)"
 }
