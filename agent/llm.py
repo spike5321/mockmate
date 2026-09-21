@@ -35,6 +35,29 @@ DEFAULT_EMBEDDING_MODEL = "embedding-3"
 # 这些状态码是"值得重试"的：限流 + 服务端临时故障
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
+# 每类错误的重试基数（秒），退避时长 = 基数 × 2^(已重试次数)。
+#
+# ★ 429 必须单独给一个大基数，不能和别的错误共用一套退避。
+#   服务端的限流窗口通常按**分钟**计，而 1s/2s/4s 这种"礼貌性重试"
+#   根本等不到窗口放开 —— 只会白白烧掉重试次数，然后报错退出。
+#   实测连着跑了几轮面试后就是这样崩的：
+#
+#       [重试 1/2] HTTP 429: 您的账户已达到速率限制 —— 1s 后再试
+#       [重试 2/2] HTTP 429: 您的账户已达到速率限制 —— 2s 后再试
+#       !! LLM 调用失败，循环中止
+#
+#   整场面试（36 轮 ≈ 36 次调用）跑到第 5 轮就废了，而其实只需要多等一会儿。
+#   这是"失败恢复"里最容易被忽略的一环：**退避时长要和故障的恢复周期匹配**，
+#   重试得够勤但等得不够久，等于没重试。
+RETRY_BASE = {
+    429: 10,   # 限流：10s → 20s → 40s（配合 max_retries=4 总等待 70s）
+    500: 3,
+    502: 3,
+    503: 3,
+    504: 3,
+}
+DEFAULT_RETRY_BASE = 3
+
 # 模型偶尔会把思维链的结束标签漏在正文里，长这样：
 #   "好的，请开始你的回答。</think></think> 好的，请开始你的回答。……"
 # 这是推理框架的产物，不该出现在对话正文中（会污染上下文、也难看）。
@@ -97,7 +120,9 @@ class LLMClient:
         model: str = DEFAULT_MODEL,
         base_url: str = DEFAULT_BASE_URL,
         timeout: int = 180,
-        max_retries: int = 3,
+        # 4 次 = 3 次重试。配合 RETRY_BASE[429]=10，撞限流时总等待 10+20+40=70s，
+        # 刚好能覆盖一次分钟级的限流窗口。设成 3 次（总等待 30s）实测不够。
+        max_retries: int = 4,
         verbose: bool = True,
     ) -> None:
         if not api_key:
@@ -135,6 +160,7 @@ class LLMClient:
         """
         last_err = ""
         for attempt in range(1, self.max_retries + 1):
+            retry_base = DEFAULT_RETRY_BASE
             try:
                 resp = self._post(path, payload)
             except requests.RequestException as exc:
@@ -146,9 +172,11 @@ class LLMClient:
                 if resp.status_code not in RETRYABLE_STATUS:
                     # 4xx 里除了限流，都是我们自己的问题，重试没意义
                     raise LLMError(last_err)
+                # 限流这类故障恢复得慢，退避要长一点（见 RETRY_BASE 的注释）
+                retry_base = RETRY_BASE.get(resp.status_code, DEFAULT_RETRY_BASE)
 
             if attempt < self.max_retries:
-                wait = 2 ** (attempt - 1)          # 1s, 2s, 4s
+                wait = retry_base * (2 ** (attempt - 1))
                 if self.verbose:
                     print(f"    [重试 {attempt}/{self.max_retries - 1}] {last_err} —— {wait}s 后再试")
                 time.sleep(wait)

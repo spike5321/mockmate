@@ -93,6 +93,7 @@ TOOL_SCHEMAS: list[dict] = [
                 "从题库里取一道题。技术面算法题用 track=coding（需带 difficulty），"
                 "系统设计题用 track=system_design，HR 行为面用 track=hr（需带 stage）。"
                 "每次只取一道，问完并拿到候选人回答、评分之后，再取下一道。"
+                "**题库里没有的题（比如项目深挖）不要用这个工具，改用 log_custom_question。**"
             ),
             "parameters": {
                 "type": "object",
@@ -120,15 +121,49 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "log_custom_question",
+            "description": (
+                "登记一道**你自己拟的题**（题库里没有的，比如根据简历出的项目深挖题），"
+                "返回一个 question_id。"
+                "为什么要登记：`score_answer` 只认 question_id，不登记的题根本评不了分，"
+                "复盘报告里也就不会有这道题的表现记录。"
+                "登记之后照题目原文向候选人提问即可。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "track": {
+                        "type": "string",
+                        "enum": ["project", "coding", "system_design", "hr"],
+                        "description": "题目类型，项目深挖用 project",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "题目原文，就是你准备问候选人的那句话",
+                    },
+                    "rubric": {
+                        "type": "string",
+                        "description": "你希望考察的点，逗号分隔，例如「技术选型理由, 量化数据, 踩过的坑」",
+                    },
+                },
+                "required": ["track", "question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "score_answer",
             "description": (
-                "给候选人对某道题的回答打分。question_id 必须是 pick_question 返回过的 id。"
+                "给候选人对某道题的回答打分。"
+                "question_id 必须是 `pick_question` 或 `log_custom_question` 返回过的 id —— "
+                "自己临时想的 id 不存在，会被判为错误。"
                 "候选人每回答完一题就要立刻评分，不要攒着。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "question_id": {"type": "string", "description": "pick_question 返回的题目 id"},
+                    "question_id": {"type": "string", "description": "题目 id（必须来自出题工具的返回值）"},
                     "answer": {"type": "string", "description": "候选人刚才的原话"},
                 },
                 "required": ["question_id", "answer"],
@@ -215,6 +250,10 @@ class ToolBox:
     VALID_DIFFICULTIES = {"easy", "medium", "hard"}
     VALID_STAGES = {"self_intro", "motivation", "pressure", "career_plan"}
 
+    # ★ 自拟题（log_custom_question）允许的类型。
+    #   比题库多一个 "project" —— 项目深挖本来就不走题库，靠面试官根据简历自己拟。
+    VALID_CUSTOM_TRACKS = {"project", "coding", "system_design", "hr"}
+
     def __init__(self, scenario_id: str) -> None:
         self.scenario_id = scenario_id
 
@@ -222,6 +261,7 @@ class ToolBox:
         self.questions: dict[str, dict] = {}   # question_id -> 题目原文
         self.records: list[dict] = []           # 逐题记录：题目 / 回答 / 分数
         self.last_question: dict | None = None  # 最近一次出的题（给模拟候选人用）
+        self.custom_count = 0                   # 已登记的自拟题数量（用来生成 id）
 
         # ★ 待答题状态（第一次跑挂了之后补的，见文末「踩坑记录」）
         #   有值 = 台上有一道题还等着候选人回答。
@@ -356,6 +396,59 @@ class ToolBox:
                 "follow_up_path", "question", "scenario", "stage",
                 "good_answer_outline", "solution_outline", "tags")
         return {k: q[k] for k in keep if k in q}
+
+    def _t_log_custom_question(self, track: str, question: str, rubric: str = "") -> dict:
+        """登记一道面试官自己拟的题（题库里没有的），返回 id 供评分用。
+
+        ★ 为什么必须有这个工具？
+
+          提示词要求「项目深挖不用题库，直接根据简历提问」，同时又要求
+          「每题都要评分，评分必须有 question_id」—— 这两条**互相矛盾**：
+
+              自己拟的题 → 没有 question_id → score_answer 用不了 → 评不了分
+
+          第 8 次运行就是卡在这：模型编了一个 `project_deep_dive_1` 递给
+          score_answer，被我们的校验拦下（返回 ERR），于是这道题没留下记录，
+          后面的复盘报告也缺了项目深挖这一块。
+
+          模型编 id 其实是"聪明"的应对 —— 它想完成任务，但工具集没给它
+          合法的路径。**遇到这种情况，错的不是模型，是工具设计缺了一个口。**
+
+          办法就是补上这个口：让它把自拟的题"登记"进来，换一个合法的 id。
+          这跟题库出题在状态上完全一致 —— 两者最终都往 self.questions 里写，
+          于是 score_answer / 候选人 / 报告全都不需要改。
+        """
+        if track not in self.VALID_CUSTOM_TRACKS:
+            return {"error": f"track 只能是 {sorted(self.VALID_CUSTOM_TRACKS)} 之一，收到 {track!r}"}
+
+        text = str(question or "").strip()
+        if not text:
+            return {"error": "question 不能为空，请写上你准备问候选人的原话"}
+
+        self.custom_count += 1
+        qid = f"custom-{self.custom_count:02d}"
+
+        q = {
+            "id": qid,
+            "track": track,
+            "title": text[:60],
+            "question": text,
+            # rubric 存进 good_answer_outline：这个字段题库题也有，
+            # 评分工具和报告都认它，自拟题沿用同一套结构就不用改下游。
+            "good_answer_outline": str(rubric or "").strip(),
+            "custom": True,
+        }
+        self.questions[qid] = q
+        self.last_question = q
+        self.pending_question = q      # 登记 = 台上有一道题等着回答，跟 pick_question 一致
+
+        return {
+            "id": qid,
+            "track": track,
+            "question": text,
+            "rubric": q["good_answer_outline"],
+            "note": "已登记。现在照 question 原文向候选人提问，等他回答后用这个 id 评分。",
+        }
 
     def _t_score_answer(self, question_id: str, answer: str) -> dict:
         q = self.questions.get(question_id)

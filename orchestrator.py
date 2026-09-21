@@ -102,6 +102,7 @@ def run_interview(
     turn = 0
     error: str | None = None
     nod_streak = 0   # 连续几轮没能给出答案（防死循环保险丝，详见分支 B 的注释）
+    nudged = False   # 是否已经提醒过模型"该交报告了"
 
     if verbose:
         banner(f"MockMate 自研调度循环 · 场景 {scenario_id} · 模型 {model}")
@@ -112,6 +113,25 @@ def run_interview(
     # =======================================================================
     while turn < max_turns and not toolbox.finished:
         turn += 1
+
+        # ---- ⓪ 预算提醒：快聊完了还没交报告，就推它一把 ----
+        # 模型没有"我已经聊了多少轮"的概念 —— 在它的视角里，对话就是一条
+        # 一直往下延伸的历史，没有长度。前两次运行就是一路聊到撞上限，
+        # 报告栏是空的（而报告才是这个产品真正的交付物）。
+        # 所以由我们这一层告诉它剩余预算。这也算"失败恢复"的一种：
+        # 与其等它撞墙，不如在墙前面提醒一次。
+        remaining = max_turns - turn
+        if 0 < remaining <= 3 and toolbox.report_path is None and not nudged:
+            nudged = True
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "（面试时间快到了）请立刻调用 submit_report 提交复盘报告，"
+                               "然后调用 end_interview 结束面试。",
+                }
+            )
+            if verbose:
+                log(turn, "⏰", f"剩余 {remaining} 轮，模型还没交报告 —— 已提醒")
 
         # ---- ① 让模型做一次决策 ----
         try:
@@ -195,8 +215,13 @@ def run_interview(
         )
 
         if should_answer:
-            question = toolbox.consume_pending()
-            answer = candidate.answer_for(question)
+            # 台上有题就把题取走；台上没题说明这是**自由追问**（项目深挖之类），
+            # 那就沿用上一道题的语境 —— 追问确实没有 question_id，
+            # 但"刚刚问的是哪一类"这个上下文还在，候选人靠它选对应的话题池。
+            question = toolbox.consume_pending() or toolbox.last_question
+            # spoken 也要给它：自由追问有可能换话题（上一题问算法，
+            # 这一句突然说"聊聊你的项目"），只有读到原话才判得出来。
+            answer = candidate.answer_for(question, spoken=spoken)
             nod_streak = 0
             if verbose:
                 print(f"       🙋 候选人：{clip(answer, 300)}")
