@@ -238,6 +238,23 @@ score_answer(question_id, answer)
 | 语料 | `knowledge/*.md` → 改完跑 `python -m kb.build --rebuild` |
 | 报告长什么样 | `tools/mock_tools.py`（`_render_markdown_report`） |
 
+### 改完怎么验证
+
+```bash
+python -m pytest tests -v     # 117 项，离线，不需要 API Key，约 1.5 秒
+python e2e_test.py           # 工具链路端到端自检（也不调模型）
+```
+
+`tests/` 只测确定性逻辑，所以加功能时**先往这里加一条测试**比先跑整场面试划算得多
+（整场面试要花额度、还会撞限流）。三条被测试钉住的设计约束：
+
+- 评分请求不带对话历史（防光环效应）—— `test_evaluator.py::test_scoring_prompt_has_no_conversation_history`
+- 降级打分必须打上 `source=rule-fallback` —— `test_tools.py::test_record_carries_source_and_dimensions`
+- 题库里每个评分维度在提示词里都有中文释义 —— `test_evaluator.py::test_every_bank_rubric_dimension_has_a_hint`
+
+> 加工具时最容易忘的一件事：写了 `TOOL_SCHEMAS` 却忘了写 `_t_<工具名>`。
+> `test_tools.py::test_schema_names_have_implementations` 会替你发现。
+
 ---
 
 ## 10. 扩展点

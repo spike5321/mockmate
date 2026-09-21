@@ -170,6 +170,29 @@ python -u orchestrator.py --scenario backend_intern
 python e2e_test.py     # 离线跑一遍工具链路，不调模型、不消耗额度
 ```
 
+### 跑测试
+
+```bash
+python -m pytest tests -v     # 117 项，离线，不需要 API Key
+```
+
+单测只覆盖**确定性**的部分——也就是"能被机器判定对错"的那些：
+
+| 文件 | 测什么 |
+|---|---|
+| `tests/test_tools.py` | 入参校验（非法 track/difficulty/stage 必须被拦）、`pending_question` 状态流转、业务错误不能被当成成功、自拟题 id 生成、评分落账、报告总体分与逐题分对齐、检索失败 ≠ 检索为空 |
+| `tests/test_evaluator.py` | 从模型的自由发挥里抠 JSON、量纲归一（0.8 / 8 / 80 / "0.8"）、键名模糊匹配、加权计算、**覆盖率 < 60% 判失败**、熔断器、缓存、降级标记 |
+| `tests/test_kb.py` | 按标题切分且不串知识点、无空行文本退回按行切、超长段落硬切带重叠、片段 id 内容指纹、`distance → 相似度` 换算 |
+
+三条刻意写进测试的**设计约束**（以后有人"顺手"改掉会立刻红）：
+
+- 评分请求里**只有「系统提示 + 这一道题」**，不带整场对话历史——`test_scoring_prompt_has_no_conversation_history`
+- 降级打分必须**标出来**，不能假装没降级——`test_fallback_marks_reason_that_it_is_degraded`
+- 题库里每个评分维度在提示词里都**必须有中文释义**——`test_every_bank_rubric_dimension_has_a_hint`
+
+> 单测不碰真实 LLM 调用：评分器用一个假客户端顶替，报告落盘写到临时目录
+> （否则每跑一次测试就把仓库里那份真实报告覆盖掉）。
+
 ### 常用参数
 
 | 参数 | 作用 |
@@ -345,7 +368,12 @@ mockmate/
 - [x] **阶段 2** 接入 RAG 检索层（`kb/` + 向量检索 + 面试情报语料）
 - [x] **阶段 2.5** 候选人话题感知 + 会说也会认输
 - [x] **阶段 3** 真实 LLM 评分（替换按字数打分）
-- [ ] **阶段 4** 门面：README、架构图、pytest 单测、Demo 录屏 ← 进行中
+- [x] **阶段 4** 门面 ← 进行中
+  - [x] README 重写 + mermaid 架构图 + 实测数据（取自 `traces/`，可审计）
+  - [x] `docs/architecture.md` 重写为可上手版本
+  - [x] pytest 单测 117 项（离线、不花额度）
+  - [ ] Demo 录屏（终端跑一场真实面试）
+  - [ ] 旧目录归档到 `legacy/`、`.mailmap` 修贡献图
 - [ ] **阶段 5** 多模型路由：模型切换 + 限流时中断询问用户 + checkpoint 断点续跑；本地 embedding 兜底；向量 + BM25 混合检索
 - [ ] **阶段 6** Web 界面（Streamlit）：侧栏选模型、填 Key、实时看面试过程
 
