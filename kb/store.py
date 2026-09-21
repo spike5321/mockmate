@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 from typing import Callable
@@ -35,7 +36,10 @@ from typing import Callable
 import chromadb
 
 ROOT = Path(__file__).resolve().parent.parent
-KB_DIR = ROOT / ".kb"            # 向量库落盘目录（.gitignore 已忽略）
+
+# 向量库落盘目录（.gitignore 已忽略）。
+# 可用 MOCKMATE_KB_DIR 覆盖 —— 测试和试跑就不必动到真实的那份库。
+KB_DIR = Path(os.environ.get("MOCKMATE_KB_DIR") or (ROOT / ".kb"))
 DOCS_DIR = ROOT / "knowledge"    # 语料目录
 COLLECTION_NAME = "mockmate_kb"
 
@@ -177,6 +181,35 @@ def _chunk_id(source: str, index: int, text: str) -> str:
     """★ 修正 ③：id 里带上内容指纹，内容变了 id 就变。"""
     digest = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
     return f"{source}::{index}::{digest}"
+
+
+# ---------------------------------------------------------------------------
+# 向量库的「空间标记」
+# ---------------------------------------------------------------------------
+
+
+def set_embed_sig(signature: str) -> None:
+    """把「这个库里的向量是谁算出来的」记在集合上。
+
+    记的是 `provider:模型名` 这样的字符串（如 local:BAAI/bge-small-zh-v1.5）。
+    为什么不只记维度？因为**维度相同不等于向量空间相同** ——
+    512 维的中文向量模型不止一个，拿 A 模型的查询向量去查 B 模型建的库，
+    不会报错，只会得到一堆没意义的相似度。那种错最难查：它看起来"能跑"。
+    """
+    col = get_collection()
+    # ★ Chroma 的 collection.modify() 只要在 metadata 里看到 hnsw:space 就报错
+    #   （"Changing the distance function of a collection once it is created is not
+    #   supported"），哪怕传的值和现有的一模一样。所以先把这个键剔掉再写回，
+    #   否则"记一下建库用的模型"这么个小事会把整条建库命令搞崩。
+    #   距离函数本身存在 collection 的 configuration 里，不受这次修改影响。
+    meta = {k: v for k, v in (col.metadata or {}).items() if k != "hnsw:space"}
+    meta["embed_sig"] = signature
+    col.modify(metadata=meta)
+
+
+def get_embed_sig() -> str | None:
+    """读出建库时的向量化身份。改造前建的老库没有这个标记，返回 None。"""
+    return (get_collection().metadata or {}).get("embed_sig")
 
 
 def ingest(

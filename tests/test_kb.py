@@ -221,22 +221,35 @@ class _FakeCollection:
 
 
 class _FakeEmbedder:
+    """假的向量化入口，签名对齐 kb.embed.embed_texts（返回 list[list[float]]）。"""
+
     def __init__(self):
         self.texts = None
 
-    def embed(self, texts):
+    def __call__(self, texts, model=None):
         self.texts = texts
         return [[0.1, 0.2, 0.3]]
+
+
+def _stub_embedding(monkeypatch, collection, embedder=None, built=None):
+    """把检索层的外部依赖一次换齐：向量库、向量化、库的建库标记。
+
+    built 传 None 表示"老库没有标记"（改造前建的库就是这种）。
+    """
+    from kb import search
+
+    monkeypatch.setattr(search, "get_collection", lambda: collection)
+    monkeypatch.setattr(search, "get_embed_sig", lambda: built)
+    fake = embedder or _FakeEmbedder()
+    monkeypatch.setattr(search, "embed_texts", fake)
+    return fake
 
 
 def test_retrieve_converts_cosine_distance_to_similarity(monkeypatch):
     """cosine 空间下 distance = 1 - 余弦相似度，score 要落回 0~1 的相似度口径。"""
     from kb import search
 
-    monkeypatch.setattr(
-        search, "get_collection", lambda: _FakeCollection([0.1, 0.4])
-    )
-    monkeypatch.setattr(search, "_client", _FakeEmbedder())
+    _stub_embedding(monkeypatch, _FakeCollection([0.1, 0.4]))
 
     hits = search.retrieve("缓存一致性", k=3)
     assert [h["score"] for h in hits] == [0.9, 0.6]
@@ -249,22 +262,86 @@ def test_retrieve_clamps_k_to_collection_size(monkeypatch):
     from kb import search
 
     seen: list[int] = []
-    monkeypatch.setattr(search, "get_collection", lambda: _FakeCollection([0.2, 0.3], seen))
-    monkeypatch.setattr(search, "_client", _FakeEmbedder())
+    _stub_embedding(monkeypatch, _FakeCollection([0.2, 0.3], seen))
 
     search.retrieve("query", k=5)
     assert seen == [2]
 
 
 def test_empty_store_returns_empty_without_embedding(monkeypatch):
-    """★ 库没建是正常状态，不是错误：直接返回 []，不去读 Key、不发请求。"""
+    """★ 库没建是正常状态，不是错误：直接返回 []，不去建模型、不发请求。"""
     from kb import search
 
     class _Exploding(_FakeEmbedder):
-        def embed(self, texts):
-            raise AssertionError("空库不该触发 embedding 调用")
+        def __call__(self, texts, model=None):
+            raise AssertionError("空库不该触发向量化调用")
 
-    monkeypatch.setattr(search, "get_collection", lambda: _FakeCollection([]))
-    monkeypatch.setattr(search, "_client", _Exploding())
+    _stub_embedding(monkeypatch, _FakeCollection([]), _Exploding())
 
     assert search.retrieve("anything") == []
+
+
+def test_retrieve_refuses_when_store_built_by_another_model(monkeypatch):
+    """★ 库里的向量和当前配置不是一套时，宁愿明确失败。
+
+    不拦的话检索**不会报错**，只会返回一堆无意义的相似度 ——
+    看起来"还能用"，实际全错。这是最难查的一类问题。
+    """
+    from kb import search
+
+    _stub_embedding(monkeypatch, _FakeCollection([0.1]), built="zhipu:embedding-3")
+    monkeypatch.setattr(
+        search,
+        "provider_info",
+        lambda model=None: {"signature": "local:BAAI/bge-small-zh-v1.5"},
+    )
+
+    with pytest.raises(RuntimeError, match="--rebuild"):
+        search.retrieve("q")
+
+
+def test_retrieve_allows_legacy_store_without_signature(monkeypatch):
+    """老库没有建库标记 —— 不能因此把检索整个拦死。"""
+    from kb import search
+
+    _stub_embedding(monkeypatch, _FakeCollection([0.1]), built=None)
+    assert len(search.retrieve("q")) == 1
+
+
+# ===========================================================================
+# 向量库的「建库标记」
+# ===========================================================================
+
+
+def test_embed_sig_round_trip_on_a_real_collection(monkeypatch, tmp_path):
+    """★ 记「这个库是谁建的」不能反过来把建库搞崩。
+
+    Chroma 的 collection.modify() 只要在 metadata 里看到 hnsw:space
+    就无条件报错（"Changing the distance function ... is not supported"），
+    哪怕传的值和现有的一模一样 —— 踩过一次，建库命令在最后一步整条倒掉：
+    片段都写进去了，退出码却是 1。
+    """
+    from kb import store
+
+    monkeypatch.setattr(store, "KB_DIR", tmp_path / "kb")
+    monkeypatch.setattr(store, "_collection", None)
+
+    store.set_embed_sig("local:BAAI/bge-small-zh-v1.5")
+    assert store.get_embed_sig() == "local:BAAI/bge-small-zh-v1.5"
+
+    # 换了 provider 再记一次，要能覆盖
+    store.set_embed_sig("zhipu:embedding-3")
+    assert store.get_embed_sig() == "zhipu:embedding-3"
+
+
+def test_legacy_collection_without_embed_sig(monkeypatch, tmp_path):
+    """改造前建的库没有这个标记，读出来应该是 None 而不是报错。"""
+    from kb import store
+
+    monkeypatch.setattr(store, "KB_DIR", tmp_path / "kb")
+    monkeypatch.setattr(store, "_collection", None)
+
+    assert store.get_embed_sig() is None
+    # 老库上补标记也要能成功
+    store.set_embed_sig("local:x")
+    assert store.get_embed_sig() == "local:x"

@@ -5,7 +5,7 @@
 > 这是一个**自研的 LLM Agent 调度循环**：模型自己决定下一步做什么——读简历、检索岗位情报、出题、追问、打分、交报告、结束，
 > 循环什么时候停也由它判断。**决策循环是这个仓库自己写的代码，不依赖任何 Agent 框架。**
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-118%20passed-brightgreen)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-136%20passed-brightgreen)
 
 ### ▶ 先看这个：一次真实运行的完整回放
 
@@ -67,7 +67,7 @@ flowchart TD
 
     THINK -->|end_interview| FINISH["退出循环"]
     TOOLS["8 个工具"] -.->|"进程内直调"| DISPATCH
-    KB["kb/ · 向量检索层"] -.->|"Chroma + embedding-3"| TOOLS
+    KB["kb/ · 向量检索层"] -.->|"Chroma + 可换的 embedding（智谱 / 本地）"| TOOLS
     JUDGE["独立评分模型"] -.->|"max_retries=2 · 失败降级"| TOOLS
     FINISH --> OUT["报告 + 决策轨迹落盘"]
 ```
@@ -91,9 +91,10 @@ flowchart TD
 | `agent/prompts.py` | 系统提示词 | 面试官的行为准则（由平台时代的 `Agent.md` 改写而来） |
 | `agent/candidate.py` | 模拟候选人 | 题库题按 id 精确匹配，追问题按**话题池**作答，池子轮完一圈会认输 |
 | `agent/evaluator.py` | 单题评分器 | LLM 判断维度达成度 → 代码算加权总分 → 失败降级为规则打分 |
+| `kb/embed.py` | 向量化入口 | 按 `EMBEDDING_PROVIDER` 分发到智谱 / 本地模型，**建库和检索共用这一份** |
 | `kb/store.py` | 知识库入库 | 按 markdown 标题切小节 → 向量化 → 写 Chroma |
-| `kb/search.py` | 检索层 | `retrieve(query, k)` 返回片段 + 相似度 |
-| `kb/build.py` | 建库 CLI | `python -m kb.build [--rebuild] [--show]` |
+| `kb/search.py` | 检索层 | `retrieve(query, k)` 返回片段 + 相似度；库和配置不是一套时明确报错 |
+| `kb/build.py` | 建库 CLI | `python -m kb.build [--rebuild] [--show] [--provider local]` |
 | `knowledge/*.md` | 面试情报语料 | 面试流程 / Redis 考点 / HTTP 考点 / 系统设计框架 |
 | `tools/mock_tools.py` | 场景数据 + 报告渲染 | 题库、简历、JD，以及 markdown 报告的生成 |
 
@@ -150,6 +151,34 @@ flowchart TD
 
 排序完全反转。
 
+### 向量检索：换成本地模型之后（对照实测）
+
+检索层的向量化支持两个 provider。同一套语料（4 篇 / 33 片段）、同一组问题，
+两边各建一次库，只取 Top1：
+
+| 问题 | 本地 `bge-small-zh-v1.5`（512 维） | 智谱 `embedding-3`（2048 维） |
+|---|---|---|
+| 缓存击穿怎么处理 | **0.695** 【2. 缓存击穿】 | 0.494 【2. 缓存击穿】 |
+| 分布式锁怎么实现 | **0.753** 【五、分布式锁】 | 0.634 【五、分布式锁】 |
+| 系统设计题该怎么组织回答 | **0.676** 【解题框架与常见题目】 | 0.564 【四、回答时的常见失分点】 |
+| 自我介绍怎么讲 | 0.542 【四、面试准备建议】 | 0.352 【HR 面】 |
+| 团队协作里遇到过什么冲突 | 0.532 【HR 面】 | 0.426 【HR 面】 |
+| 数据库索引为什么用 B+ 树 | 0.564 【六、幂等性】 | 0.471 【三、常被追问的权衡表】 |
+
+怎么读这张表：
+
+- 前三行是语料里**明确写了**的东西，两边都落到同一份文档 —— 本地不输，
+  「系统设计题怎么组织回答」还更贴（本地命中【解题框架】，智谱命中相邻的【常见失分点】）。
+- 最后两行问的东西语料里**没有对应章节**，两边都是"矮子里拔将军"。
+  但注意分数：本地对真命中给 0.68~0.75、对瞎命中给 0.53~0.56，**有区分度**。
+- **分数不能跨 provider 比较** —— 同一个问题、命中的还是同一个片段，
+  本地给 0.695、智谱给 0.494。这就是"换模型必须重建库"的真正原因：
+  混着用不会报错，只会让排序失去意义。
+
+结论：**这个语料量级下，512 维换成 2048 维没有收益。**
+本地模型的价值不在准确率，在**免 Key 免网络** ——
+评审 clone 下来不填任何配置，检索这一层也能跑起来。
+
 ---
 
 ## 4. 快速开始
@@ -169,10 +198,18 @@ python -m kb.build
 python -u orchestrator.py --scenario backend_intern
 ```
 
-**两个容易踩的点**：
+> **第 3 步不填 Key 也能跑。** 没配 `ZHIPU_API_KEY` 时向量化会自动改用本地模型
+> （`BAAI/bge-small-zh-v1.5`，512 维，首次运行下载约 91MB，之后完全离线）。
+> 想显式指定：`python -m kb.build --provider local`。
+> 跑面试（第 4 步）仍然需要 Key —— 面试官和评分官是远程模型。
+
+**三个容易踩的点**：
 
 - `python -m kb.build` 必须在仓库根目录执行（`-m` 依赖当前目录在 `sys.path` 里）。
 - 跑面试要加 `-u`。不加的话 Python 会缓冲输出，重定向到日志文件时你会一直看到 0 字节，没法判断进度。
+- **换 embedding 模型（含 `local` ↔ `zhipu` 之间切换）之后必须 `--rebuild`**。
+  不重建的话，检索**不会报错**，只会返回一堆无意义的相似度 ——
+  两种模型的向量空间不可比。所以这里做了个显式检查：库和当前配置不是一套时会直接报错并告诉你重建命令。
 
 ### 想先跑个不花钱的自检
 
@@ -186,7 +223,7 @@ python e2e_test.py     # 离线跑一遍工具链路，不调模型、不消耗�
 ### 跑测试
 
 ```bash
-python -m pytest tests -v     # 118 项，离线，不需要 API Key
+python -m pytest tests -v     # 136 项，离线，不需要 API Key
 ```
 
 单测只覆盖**确定性**的部分——也就是"能被机器判定对错"的那些：
@@ -195,7 +232,8 @@ python -m pytest tests -v     # 118 项，离线，不需要 API Key
 |---|---|
 | `tests/test_tools.py` | 入参校验（非法 track/difficulty/stage 必须被拦）、`pending_question` 状态流转、业务错误不能被当成成功、自拟题 id 生成、评分落账、报告总体分与逐题分对齐、检索失败 ≠ 检索为空 |
 | `tests/test_evaluator.py` | 从模型的自由发挥里抠 JSON、量纲归一（0.8 / 8 / 80 / "0.8"）、键名模糊匹配、加权计算、**覆盖率 < 60% 判失败**、熔断器、缓存、降级标记 |
-| `tests/test_kb.py` | 按标题切分且不串知识点、无空行文本退回按行切、超长段落硬切带重叠、片段 id 内容指纹、`distance → 相似度` 换算 |
+| `tests/test_kb.py` | 按标题切分且不串知识点、无空行文本退回按行切、超长段落硬切带重叠、片段 id 内容指纹、`distance → 相似度` 换算、**库和配置不是一套时必须明确失败** |
+| `tests/test_embed.py` | provider 的选择与降级规则（有 Key 用智谱 / 没 Key 用本地 / 显式指定绝不许静默降级）、签名能区分 provider 与模型、两个 Windows 坑（HF 软链接开关、缓存不能落在系统临时目录） |
 
 三条刻意写进测试的**设计约束**（以后有人"顺手"改掉会立刻红）：
 
@@ -383,8 +421,9 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
 - **没有实时 Web 界面**，只有命令行。面试过程是流式打印在终端里的。
   运行回放页（`docs/replay/`）是**事后播放一份静态轨迹**，不是实时界面 —— 真正的 Web 界面在路线图阶段 6。
 - **免费模型在晚高峰会被平台级限流**。调试时不要背靠背连续跑整轮面试，中间留几十秒。
-- **知识库很小**：4 篇语料、33 个片段。向量检索用的是智谱 `embedding-3`（2048 维），
-  没有本地兜底——换 embedding 模型必须 `python -m kb.build --rebuild`（维度不同不能混库）。
+- **知识库很小**：4 篇语料、33 个片段。向量化支持智谱 `embedding-3`（2048 维）
+  和本地 `bge-small-zh-v1.5`（512 维）两种，默认「有 Key 用智谱、没 Key 用本地」。
+  换模型必须 `python -m kb.build --rebuild` —— 理由见第 3 节那张对照表。
 - **评分模型只适合单轮无状态调用**。`glm-4-flash-250414` 判分够用，但它不能当面试官（见第 6 节第 12 条）。
 
 ---
@@ -395,15 +434,15 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
 - [x] **阶段 2** 接入 RAG 检索层（`kb/` + 向量检索 + 面试情报语料）
 - [x] **阶段 2.5** 候选人话题感知 + 会说也会认输
 - [x] **阶段 3** 真实 LLM 评分（替换按字数打分）
-- [x] **阶段 4** 门面 ← 进行中
+- [x] **阶段 4** 门面
   - [x] README 重写 + mermaid 架构图 + 实测数据（取自 `traces/`，可审计）
   - [x] `docs/architecture.md` 重写为可上手版本
-  - [x] pytest 单测 118 项（离线、不花额度）
-  - [x] **运行回放页**（`docs/replay/`，单文件静态 HTML，由轨迹生成）
+  - [x] pytest 单测 136 项（离线、不花额度）
+  - [x] **运行回放页**（`docs/replay/`，单文件静态 HTML，由轨迹生成）+ GitHub Pages
+  - [x] 旧目录归档到 `legacy/`、`.mailmap` 统一贡献者身份
+  - [x] **本地 embedding 兜底**：不填 Key 也能建库、能检索（免 Key 免网络）
   - [ ] Demo 录屏 GIF（可选，回放页已覆盖大部分需求）
-  - [ ] 开启 GitHub Pages（Settings → Pages → Source: `main` / `docs`）
-  - [ ] 旧目录归档到 `legacy/`、`.mailmap` 修贡献图
-- [ ] **阶段 5** 多模型路由：模型切换 + 限流时中断询问用户 + checkpoint 断点续跑；本地 embedding 兜底；向量 + BM25 混合检索
+- [ ] **阶段 5** 多模型路由：模型切换 + 限流时中断询问用户 + checkpoint 断点续跑；向量 + BM25 混合检索
 - [ ] **阶段 6** Web 界面（Streamlit）：侧栏选模型、填 Key、实时看面试过程
 
 ---

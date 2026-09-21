@@ -6,31 +6,32 @@
 工具结果交回给它，由它决定怎么用、要不要再检索一次。
 
 **这个分工就是 Agentic RAG 和固定管线的分界线。**
+
+向量化不在这里实现 —— 统一走 kb.embed.embed_texts()。
+改造前这个文件里有一份自己的 LLMClient 建法，和 kb/build.py 里那份重复，
+换 embedding 时只改一处就会让"库"和"查询词"落到不同的向量空间。
 """
 
 from __future__ import annotations
 
-import os
-
-from kb.store import get_collection
-
-_client = None
+from kb.embed import embed_texts, provider_info
+from kb.store import get_collection, get_embed_sig
 
 
-def _get_client():
-    """惰性建客户端：只有真要检索时才去读 Key、建对象。
+def _assert_same_space() -> None:
+    """确认「库里的向量」和「现在给查询词算的向量」是同一套。
 
-    这样即便没配 Key，`import kb` 也不会崩 —— 只有真正调检索时才报错。
+    不做这个检查也不会报错 —— 相似度会静静变成一堆噪声，
+    看起来"检索还能用"，只是结果莫名其妙。这类错最难查，所以宁可明确失败。
     """
-    global _client
-    if _client is None:
-        from agent.llm import LLMClient
-
-        api_key = os.environ.get("ZHIPU_API_KEY", "")
-        if not api_key:
-            raise RuntimeError("缺少 ZHIPU_API_KEY，无法向量化检索词")
-        _client = LLMClient(api_key=api_key, verbose=False)
-    return _client
+    built = get_embed_sig()
+    now = provider_info()["signature"]
+    if built and built != now:
+        raise RuntimeError(
+            f"向量库是用 {built} 建的，当前配置是 {now}。"
+            f"两套向量空间不可比（维度相同也未必通用），请重建："
+            f"python -m kb.build --rebuild"
+        )
 
 
 def retrieve(query: str, k: int = 3) -> list[dict]:
@@ -45,9 +46,13 @@ def retrieve(query: str, k: int = 3) -> list[dict]:
     col = get_collection()
     count = col.count()
     if count == 0:
+        # 库空时直接返回，连模型都不用加载 ——
+        # 本地模型第一次加载要十几秒，空库时白等就太蠢了。
         return []
 
-    vector = _get_client().embed([query])[0]
+    _assert_same_space()
+
+    vector = embed_texts([query])[0]
     res = col.query(query_embeddings=[vector], n_results=min(k, count))
 
     hits: list[dict] = []
@@ -75,4 +80,13 @@ def kb_status() -> dict:
         for meta in got.get("metadatas") or []:
             src = meta.get("source", "?")
             sources[src] = sources.get(src, 0) + 1
-    return {"chunks": col.count(), "sources": sources}
+    try:
+        current = provider_info()["signature"]
+    except (ValueError, RuntimeError):
+        current = "?"
+    return {
+        "chunks": col.count(),
+        "sources": sources,
+        "built_with": get_embed_sig(),   # 库是谁建的（老库可能是 None）
+        "current": current,              # 现在的配置
+    }

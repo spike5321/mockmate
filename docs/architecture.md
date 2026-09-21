@@ -150,9 +150,9 @@ while turn < max_turns and not toolbox.finished:
 ## 6. 检索层（Agentic RAG）
 
 ```
-knowledge/*.md  --(按 markdown 标题切小节)-->  chunks  --(embedding-3)-->  Chroma(.kb/, cosine)
-                                                                               ↑
-            面试官调 search_jd_kb(query)  --(同一个 embedding 模型)-->  向量查询 → top-k 片段
+knowledge/*.md  --(按 markdown 标题切小节)-->  chunks  --(kb/embed.py)-->  Chroma(.kb/, cosine)
+                                                                                 ↑
+            面试官调 search_jd_kb(query)  --(同一个 embed_texts())-->  向量查询 → top-k 片段
 ```
 
 **和固定管线的分界线**：这里的检索结果不是被拼进 prompt 送给"答案生成器"，
@@ -160,6 +160,29 @@ knowledge/*.md  --(按 markdown 标题切小节)-->  chunks  --(embedding-3)--> 
 
 检索层不抛异常：库是空的时候 `retrieve()` 返回 `[]`，由调用方回退到内置的少量情报。
 "库没建"是**正常状态**，不是错误。
+
+### 向量化是谁算的（`kb/embed.py`）
+
+`embed_texts()` 是**全项目唯一的向量化入口** —— 建库和检索都走它。
+这条约束是有来历的：改造前 `kb/build.py` 和 `kb/search.py` 各写了一份
+"读 Key → 建客户端 → embed"，想换 embedding 得改两个地方，
+而**只改一处不会报错，只会让库和查询词落到不同的向量空间**。
+那种错最难查：检索看起来还在工作，只是结果莫名其妙。
+
+| `EMBEDDING_PROVIDER` | 行为 |
+|---|---|
+| `auto`（默认） | 有 `ZHIPU_API_KEY` 用智谱 `embedding-3`（2048 维），没有用本地 `bge-small-zh-v1.5`（512 维） |
+| `zhipu` | 强制智谱。没 Key 直接报错，**不静默降级** |
+| `local` | 强制本地模型（fastembed + onnxruntime，首次下载约 91MB，之后离线） |
+
+`auto` 的那条降级路径是为了**免 Key 免网络**：评审 clone 下来不填任何配置，
+`python -m kb.build` 也能建库、能检索。实测这个语料量级下
+512 维与 2048 维的命中质量没有差别（对照表见 README 第 3 节）。
+
+库的"身份"会写进 collection metadata（`embed_sig`，形如 `local:BAAI/bge-small-zh-v1.5`）。
+检索前会比对一次：**不一致就明确报错并给出重建命令**。
+不比对也不会报错 —— 相似度会静静变成噪声，这种失败方式比崩溃危险得多。
+比的是 `provider:模型名` 而不是维度，因为维度相同 ≠ 向量空间相同。
 
 ### 切分策略
 
@@ -259,7 +282,7 @@ docs/examples/run14_report.json ─┘
 ### 改完怎么验证
 
 ```bash
-python -m pytest tests -v     # 118 项，离线，不需要 API Key，约 1.2 秒
+python -m pytest tests -v     # 136 项，离线，不需要 API Key，约 1.2 秒
 python e2e_test.py           # 工具链路端到端自检（也不调模型）
 ```
 
@@ -283,7 +306,9 @@ python e2e_test.py           # 工具链路端到端自检（也不调模型）
 2. **加一个工具** —— `TOOL_SCHEMAS` 里加一条 Schema，`ToolBox.dispatch()` 里加一个分支。**不用改主循环。**
 3. **换模型 / 换供应商** —— `.env` 里改 `CHAT_MODEL`，或改 `DEFAULT_BASE_URL` 指向任何 OpenAI 兼容端点。
 4. **加语料** —— 往 `knowledge/` 丢 markdown（或 PDF），`python -m kb.build --rebuild`。
-5. **换 embedding** —— 抽一层 provider，注意维度变了必须重建库。
+5. **换 embedding** —— 已经抽好 provider 层（`kb/embed.py`）：改 `EMBEDDING_PROVIDER`
+   或 `LOCAL_EMBEDDING_MODEL` 即可，建库和检索同时生效。换完记得 `--rebuild` ——
+   注意真正的理由不是"维度可能对不上"，而是**向量空间不可比**。
 6. **多模型路由** —— 供应商注册表 + 错误分类 + 限流时中断询问用户 + checkpoint 断点续跑（路线图阶段 5）。
 7. **Web 界面** —— `orchestrator.py` 的核心函数 `run_interview()` 与打印逻辑是分开的，可以直接被 Streamlit 调用。
 

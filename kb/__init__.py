@@ -20,6 +20,7 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
+from kb.embed import embed_texts, provider_info
 from kb.search import kb_status, retrieve
 
-__all__ = ["retrieve", "kb_status"]
+__all__ = ["retrieve", "kb_status", "embed_texts", "provider_info"]
