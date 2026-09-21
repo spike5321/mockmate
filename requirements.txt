@@ -1,0 +1,17 @@
+# MockMate 依赖清单
+# 安装：pip install -r requirements.txt
+
+# --- 模型调用 ---
+# 用 requests 直接打智谱的 OpenAI 兼容接口，不引入官方 zhipuai SDK。
+# 原因：zhipuai 有一个没写进依赖清单的隐形依赖 sniffio，装完直接 import 崩。
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# --- 知识库检索层（kb/）---
+# 向量库。持久化到 .kb/ 目录，可用 `python -m kb.build` 重建。
+chromadb>=0.5.0
+# 解析 PDF 语料（knowledge/ 里目前是 .md，需要放 PDF 时才用到）
+pypdf>=4.0.0
+
+# --- 测试 ---
+pytest>=8.0

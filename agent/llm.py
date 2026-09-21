@@ -28,6 +28,10 @@ import requests
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MODEL = "glm-4.5-flash"
 
+# 向量化模型。知识库检索用它把文本和问题转成同维度的向量。
+# embedding-3 输出 2048 维；换模型必须重建向量库（维度不同不能混用）。
+DEFAULT_EMBEDDING_MODEL = "embedding-3"
+
 # 这些状态码是"值得重试"的：限流 + 服务端临时故障
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
@@ -112,9 +116,9 @@ class LLMClient:
 
     # -- 内部 ---------------------------------------------------------------
 
-    def _post(self, payload: dict) -> dict:
+    def _post(self, path: str, payload: dict):
         return requests.post(
-            f"{self.base_url}/chat/completions",
+            f"{self.base_url}{path}",
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -122,6 +126,34 @@ class LLMClient:
             json=payload,
             timeout=self.timeout,
         )
+
+    def _call(self, path: str, payload: dict) -> dict:
+        """带指数退避的请求，返回解析后的 JSON。
+
+        对话和向量化共用这一套重试逻辑 —— 两个接口都会遇到限流和服务端抖动，
+        没必要写两遍。
+        """
+        last_err = ""
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = self._post(path, payload)
+            except requests.RequestException as exc:
+                last_err = f"网络异常: {exc}"
+            else:
+                if resp.status_code == 200:
+                    return resp.json()
+                last_err = f"HTTP {resp.status_code}: {resp.text[:300]}"
+                if resp.status_code not in RETRYABLE_STATUS:
+                    # 4xx 里除了限流，都是我们自己的问题，重试没意义
+                    raise LLMError(last_err)
+
+            if attempt < self.max_retries:
+                wait = 2 ** (attempt - 1)          # 1s, 2s, 4s
+                if self.verbose:
+                    print(f"    [重试 {attempt}/{self.max_retries - 1}] {last_err} —— {wait}s 后再试")
+                time.sleep(wait)
+
+        raise LLMError(f"连续 {self.max_retries} 次失败，最后一次: {last_err}")
 
     # -- 对外 ---------------------------------------------------------------
 
@@ -131,7 +163,7 @@ class LLMClient:
         tools: list[dict] | None = None,
         temperature: float = 0.3,
     ) -> LLMReply:
-        """发一次请求。失败会按指数退避重试，重试完还不行才抛错。
+        """发一次对话请求。失败会按指数退避重试，重试完还不行才抛错。
 
         temperature 设得比较低（0.3）：面试流程需要稳定，
         不然同一个场景每次跑的题目和判断会飘得很厉害。
@@ -145,27 +177,34 @@ class LLMClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"   # 让模型自己决定调不调工具
 
-        last_err = ""
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                resp = self._post(payload)
-            except requests.RequestException as exc:
-                last_err = f"网络异常: {exc}"
-            else:
-                if resp.status_code == 200:
-                    return self._parse(resp.json())
-                last_err = f"HTTP {resp.status_code}: {resp.text[:300]}"
-                if resp.status_code not in RETRYABLE_STATUS:
-                    # 4xx 里除了限流，都是我们自己的问题，重试没意义
-                    raise LLMError(last_err)
+        return self._parse(self._call("/chat/completions", payload))
 
-            if attempt < self.max_retries:
-                wait = 2 ** (attempt - 1)          # 1s, 2s, 4s
-                if self.verbose:
-                    print(f"    [重试 {attempt}/{self.max_retries - 1}] {last_err} —— {wait}s 后再试")
-                time.sleep(wait)
+    def embed(
+        self,
+        texts: list[str],
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        batch_size: int = 32,
+    ) -> list[list[float]]:
+        """把文本批量转成向量 —— 知识库检索的地基。
 
-        raise LLMError(f"连续 {self.max_retries} 次失败，最后一次: {last_err}")
+        这里有个最容易漏的细节：**返回的向量顺序不保证和输入一致**，
+        必须按返回体里的 index 字段排回来。抄示例代码时漏掉这一步，
+        就会出现"第 3 段的向量被安到第 1 段上"——检索结果看着像随机命中，
+        而且极难排查。
+
+        batch_size 是因为接口对单次 input 数组长度有限制，一次塞太多会被拒。
+        """
+        vectors: list[list[float]] = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            data = self._call("/embeddings", {"model": embedding_model, "input": batch})
+            items = sorted(data.get("data", []), key=lambda d: d.get("index", 0))
+            if len(items) != len(batch):
+                raise LLMError(
+                    f"向量化返回条数不匹配：请求 {len(batch)} 条，返回 {len(items)} 条"
+                )
+            vectors.extend(item["embedding"] for item in items)
+        return vectors
 
     def _parse(self, data: dict) -> LLMReply:
         if "error" in data:

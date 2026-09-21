@@ -65,11 +65,20 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "search_jd_kb",
-            "description": "在岗位知识库里检索面试情报，例如该公司的面试流程、常见考点、准备建议。传空格分隔的关键词。",
+            "description": (
+                "检索岗位知识库，取回面试情报：面试流程、高频技术考点、常见追问套路。"
+                "知识库用的是**向量检索**，所以 query 直接写成一句自然语言描述你想知道什么就行，"
+                "不需要堆关键词 —— 例如「缓存和数据库怎么保证一致」。"
+                "问法和资料里的原话不一样也能命中，这正是它比关键词匹配强的地方。"
+                "建议在出题之前检索一次，让题目贴近真实的考察重点。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "空格分隔的关键词，例如「面试流程 项目」"},
+                    "query": {
+                        "type": "string",
+                        "description": "自然语言描述，例如「Redis 缓存三大问题怎么答」",
+                    },
                     "top_k": {"type": "integer", "description": "返回条数，默认 3"},
                 },
                 "required": ["query"],
@@ -274,10 +283,47 @@ class ToolBox:
         return mock_jd_fetch_jd(self.scenario_id)
 
     def _t_search_jd_kb(self, query: str, top_k: int = 3) -> dict:
+        """在岗位知识库里做**向量检索**。
+
+        ── 这一版和第一版的区别 ──
+        第一版是 query.split() + 子串匹配：换个说法就检索不到 ——
+        问「缓存击穿怎么答」匹配不上写着「缓存穿透」的段落，
+        因为它在比字符，不是在比语义。
+        现在走真正的向量检索（Chroma + embedding-3），比的是语义相似度，
+        问法和资料里的原话不一样也能命中。
+
+        ── 两个工程上的讲究 ──
+        1. 知识库依赖是**惰性导入**的：没装 chromadb 时其它工具照常工作，
+           只有真调检索才报错。可选依赖就该是可选的样子。
+        2. 向量库没建时**回退到内置语料，而不是报错**。「还没入库」是很正常的
+           状态，不该让整场面试挂掉 —— 这叫优雅降级。
+        """
+        try:
+            from kb.search import retrieve
+        except ImportError as exc:  # noqa: BLE001
+            return {"error": f"知识库依赖未安装（需要 chromadb / pypdf）: {exc}"}
+
+        try:
+            hits = retrieve(query, k=top_k)
+        except Exception as exc:  # noqa: BLE001
+            # 检索失败要把错误交回模型（它可以改 query 重试），
+            # 但绝不能伪装成"没搜到" —— 那会让它以为知识库里真的没这内容。
+            return {"error": f"知识库检索失败: {type(exc).__name__}: {exc}"}
+
+        if hits:
+            return {
+                "query": query,
+                "top_k": top_k,
+                "hits": hits,
+                "hit_count": len(hits),
+                "retriever": "vector: chroma + embedding-3",
+                "note": "score 是 0~1 的语义相似度，越高越相关；source 是片段出处",
+            }
+
+        # 向量库为空 → 回退到场景自带的 jd_kb（关键词匹配）
         out = mock_jd_search_jd_kb(self.scenario_id, query, top_k)
-        # 多回一个命中数，方便在日志里一眼看出这个检索器有多弱
-        # （它现在是关键词匹配，不是向量检索 —— 阶段 2 会换掉）
         out["hit_count"] = len(out.get("hits", []))
+        out["retriever"] = "mock: 关键词匹配（向量库未构建时的回退）"
         return out
 
     def _t_pick_question(
