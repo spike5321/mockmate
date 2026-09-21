@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tools.mock_tools import (
     mock_evaluator_score_answer,
@@ -39,6 +39,9 @@ from tools.mock_tools import (
     mock_report_render,
     mock_resume_read_resume,
 )
+
+if TYPE_CHECKING:   # 只为类型标注，运行时不导入（避免与 evaluator 互相 import）
+    from agent.evaluator import AnswerEvaluator
 
 # ===========================================================================
 # ① 工具说明书（发给模型的 JSON Schema）
@@ -254,8 +257,12 @@ class ToolBox:
     #   比题库多一个 "project" —— 项目深挖本来就不走题库，靠面试官根据简历自己拟。
     VALID_CUSTOM_TRACKS = {"project", "coding", "system_design", "hr"}
 
-    def __init__(self, scenario_id: str) -> None:
+    def __init__(self, scenario_id: str, evaluator: "AnswerEvaluator | None" = None) -> None:
         self.scenario_id = scenario_id
+
+        # ★ 评分器（阶段 3 注入）。为 None 时退回规则打分 ——
+        #   这样离线自检脚本、单元测试不用配 API Key 也能跑。
+        self.evaluator = evaluator
 
         # --- 会话状态（Agent 的短期记忆）---
         self.questions: dict[str, dict] = {}   # question_id -> 题目原文
@@ -453,9 +460,21 @@ class ToolBox:
     def _t_score_answer(self, question_id: str, answer: str) -> dict:
         q = self.questions.get(question_id)
         if q is None:
-            return {"error": f"没有出过 id={question_id} 的题，请先用 pick_question 出题"}
+            # ★ 报错时顺手给一条「合法路径」。
+            #   实测弱模型会自己编 id（run13 里编了 pick_question_coding_1 到
+            #   pick_question_hr_career_plan 共 13 个，然后批量提交评分，
+            #   全被拦下、整场 0 评分）。它想完成任务，只是不知道正确的路怎么走。
+            #   光说"这个 id 不存在"是没用的 —— 得告诉它**该怎么拿到一个存在的 id**。
+            return {
+                "error": f"没有出过 id={question_id} 的题，请先用 pick_question 出题",
+                "hint": (
+                    "题库里的题要用 pick_question 取（它会返回合法 id）；"
+                    "如果是你自己拟的题（比如项目深挖），先用 log_custom_question 登记，"
+                    "用它返回的 id 再评分。不要自己编 id。"
+                ),
+            }
 
-        result = mock_evaluator_score_answer(self.scenario_id, q, answer)
+        result = self._evaluate(q, answer)
         record = {
             "question_id": question_id,
             "track": q.get("track"),
@@ -464,10 +483,30 @@ class ToolBox:
             "answer": answer,
             "score": result.get("score"),
             "comment": result.get("comment"),
-            "evidence_refs": result.get("evidence_refs", []),
+            # ★ 阶段 3 新增：逐维度得分 + 这一分是谁给的。
+            #   维度分是"为什么是这个总分"的证据，报告里能追溯到。
+            #   source 用来区分 llm / rule-fallback —— 降级评的分要标出来，
+            #   不能让读者以为每一分都是模型判的。
+            "dimensions": result.get("dimensions") or {},
+            "source": result.get("source"),
+            "evidence_refs": result.get("evidence", []),
         }
         self.records.append(record)
         return record
+
+    def _evaluate(self, question: dict, answer: str) -> dict:
+        """路由到评分器。没有评分器时退回规则打分（离线自检用）。"""
+        if self.evaluator is not None:
+            return self.evaluator.score(question, answer)
+
+        old = mock_evaluator_score_answer(self.scenario_id, question, answer)
+        return {
+            "score": old.get("score"),
+            "dimensions": {},
+            "comment": old.get("comment"),
+            "evidence": old.get("evidence_refs", []),
+            "source": "rule",
+        }
 
     def _t_submit_report(
         self,
@@ -482,12 +521,25 @@ class ToolBox:
         scenario = mock_resume_read_resume(self.scenario_id)
         candidate = scenario.get("candidate", {})
 
+        # ★ 硬数据的锚：逐题均分由评分记录算出来，不是模型拍的。
+        #   报告里同时呈现「模型给的总体分」和「逐题均分」，
+        #   读者（面试官/评审）能自己核对两者是否自洽。
+        #   我们不偷偷改模型填的值 —— 但也不让它成为唯一的数字。
+        scores = [
+            float(r["score"]) for r in self.records
+            if isinstance(r.get("score"), (int, float))
+        ]
+        question_avg = round(sum(scores) / len(scores), 2) if scores else None
+        track_avg = self.avg_by_track()
+
         data = {
             "candidate": candidate.get("name", "未知"),
             "target_role": candidate.get("target_role", ""),
             "target_company": candidate.get("target_company", ""),
             "interview_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "overall_score": overall_score,
+            "question_avg": question_avg,
+            "track_avg": track_avg,
             "radar": radar,
             "highlights": highlights,
             "weaknesses": weaknesses,
@@ -502,20 +554,109 @@ class ToolBox:
         self.report_path = out.get("report_path")
         self.report_md_path = out.get("md_path")
 
-        # ★ 只把路径回给模型，不把整篇 Markdown 塞回去 ——
-        #   报告可能有几千字，塞进上下文纯属浪费钱，模型也不需要看到它。
+        llm_scored = sum(1 for r in self.records if r.get("source") == "llm")
+
+        # ★ 只把路径和"锚定数字"回给模型，不把整篇 Markdown 塞回去 ——
+        #   报告几千字，塞进上下文纯属浪费钱，模型也不需要看到它。
         return {
             "ok": True,
             "report_path": self.report_path,
             "report_md_path": self.report_md_path,
             "round_count": len(self.records),
-            "note": "报告已落盘，请不要在回复里复述全文，只做简短总结。",
+            "question_avg_10": question_avg,
+            "track_avg_10": track_avg,
+            "scored_by": f"LLM 评了 {llm_scored} 题，其余 {len(self.records) - llm_scored} 题走规则降级",
+            "note": (
+                "报告已落盘。question_avg_10 是系统按逐题评分算出的均分（10 分制）——"
+                "如果你填的 overall_score 和它的十分之一差距很大，请在回复里说明理由。"
+                "不要在回复里复述报告全文，只做简短总结。"
+            ),
         }
 
     def _t_end_interview(self, reason: str) -> dict:
         self.finished = True
         self.finish_reason = reason
         return {"ok": True, "reason": reason, "rounds_scored": len(self.records)}
+
+    def submit_partial_report(self, reason: str) -> dict | None:
+        """面试因故障中断时，用已有记录出一份「不完整但真实」的报告。
+
+        ★ 为什么要有这个？
+
+          run12 跑到第 17 轮撞上限流，`LLMError` 让主循环 break，
+          结果是 EXIT=1 + 报告为空 —— 前面 7 分钟、3 道题的真实评分
+          **全部丢掉**。而那些已经评完的分数，恰恰是这场运行最有价值的产物。
+
+          所以这里的原则是：**宁可交一份残缺但真实的，也不要交一份空白。**
+          报告里会写清中断原因、哪几题有真实评分、哪几题没来得及评，
+          不是拿数据凑数。
+
+        返回 None 表示连一条记录都没有（那确实没什么可交的）。
+        """
+        if not self.records:
+            return None
+
+        scores = [
+            float(r["score"]) for r in self.records
+            if isinstance(r.get("score"), (int, float))
+        ]
+        avg10 = round(sum(scores) / len(scores), 2) if scores else None
+        track_avg = self.avg_by_track()
+
+        def to100(track: str) -> int | None:
+            value = track_avg.get(track)
+            return round(value * 10) if value is not None else None
+
+        radar = {
+            label: score
+            for track, label in (
+                ("coding", "算法"),
+                ("system_design", "系统设计"),
+                ("project", "项目深挖"),
+                ("hr", "行为面"),
+            )
+            if (score := to100(track)) is not None
+        }
+
+        def brief(r: dict) -> str:
+            title = " ".join(str(r.get("question") or "").split())[:40]
+            return f"{title}：{r.get('score')}/10 —— {r.get('comment')}"
+
+        graded = [r for r in self.records if isinstance(r.get("score"), (int, float))]
+        highlights = [brief(r) for r in graded if r["score"] >= 7]
+        weaknesses = [brief(r) for r in graded if r["score"] < 7]
+
+        llm_n = sum(1 for r in self.records if r.get("source") == "llm")
+        scenario = mock_resume_read_resume(self.scenario_id)
+        candidate = scenario.get("candidate", {})
+
+        data = {
+            "candidate": candidate.get("name", "未知"),
+            "target_role": candidate.get("target_role", ""),
+            "target_company": candidate.get("target_company", ""),
+            "interview_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "interrupted": True,
+            "overall_score": round(avg10 * 10) if avg10 is not None else 0,
+            "question_avg": avg10,
+            "track_avg": track_avg,
+            "radar": radar,
+            "highlights": highlights or ["（评价为 7 分以上的题目：无）"],
+            "weaknesses": weaknesses or ["（评价为 7 分以下的题目：无）"],
+            "improvements": ["（面试中断，定性的改进建议未能生成 —— 请参考上面的逐题明细）"],
+            "next_7_days_plan": [],
+            "verdict": (
+                f"本次面试因故障中断（{reason}），已评 {len(graded)} 题，"
+                f"逐题均分 {avg10} / 10，其中 {llm_n} 题由 LLM 评分。"
+                "以上仅为已完成部分的结果，不代表完整面试表现。"
+            ),
+            "rounds": self.records,
+            "generated_by": "orchestrator (自研调度循环 · 中断兜底)",
+        }
+
+        out = mock_report_render(self.scenario_id, "default", data)
+        self.report_path = out.get("report_path")
+        self.report_md_path = out.get("md_path")
+        return {"report_path": self.report_path, "graded": len(graded)}
 
     def consume_pending(self) -> dict | None:
         """取走当前待答题并清空。
@@ -529,15 +670,42 @@ class ToolBox:
     # -- 给外部用的汇总 -----------------------------------------------------
 
     def summary(self) -> dict:
-        scores = [r["score"] for r in self.records if isinstance(r.get("score"), int)]
+        scores = [
+            r["score"] for r in self.records
+            if isinstance(r.get("score"), (int, float))
+        ]
+        # 评分来源要能分开统计 —— 阶段 3 之后，"有多少题是真 LLM 评的"
+        # 本身就是运行质量的一部分（全走降级说明评分器没在工作）。
+        llm_scored = sum(1 for r in self.records if r.get("source") == "llm")
         return {
             "tool_calls": self.call_count,
             "questions_asked": len(self.questions),
             "answers_scored": len(self.records),
             "avg_score": round(sum(scores) / len(scores), 2) if scores else None,
+            "scored_by_llm": llm_scored,
+            "scored_by_rule": len(self.records) - llm_scored,
             "finished": self.finished,
             "finish_reason": self.finish_reason,
             "report_path": self.report_path,
+        }
+
+    def avg_by_track(self) -> dict:
+        """按题型算平均分（10 分制）。
+
+        ★ 这个数字是**报告总体分的锚**。原来总体分是模型自己拍的 ——
+        它没有逐题均分的概念，容易写出「逐题都是 7~8 分、总体 75 分」
+        这种对不上的组合。把均分回给它，让它的总评有据可依。
+        """
+        buckets: dict[str, list[float]] = {}
+        for r in self.records:
+            score = r.get("score")
+            if not isinstance(score, (int, float)):
+                continue
+            buckets.setdefault(str(r.get("track") or "unknown"), []).append(float(score))
+        return {
+            track: round(sum(vals) / len(vals), 2)
+            for track, vals in buckets.items()
+            if vals
         }
 
     def dump_records(self) -> str:

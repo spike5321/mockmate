@@ -41,6 +41,7 @@ if str(ROOT) not in sys.path:
 from dotenv import load_dotenv  # noqa: E402
 
 from agent.candidate import CandidateSim  # noqa: E402
+from agent.evaluator import AnswerEvaluator  # noqa: E402
 from agent.llm import DEFAULT_MODEL, LLMClient, LLMError  # noqa: E402
 from agent.prompts import build_system_prompt  # noqa: E402
 from agent.tools import TOOL_SCHEMAS, ToolBox  # noqa: E402
@@ -68,6 +69,20 @@ def log(turn: int, icon: str, text: str) -> None:
     print(f"[{turn:02d}] {icon} {text}")
 
 
+def score_hint(payload: dict) -> str:
+    """评分工具的结果里带分数时，把它缀在日志行尾。
+
+    没有这个的话，日志上只有「调用 score_answer(...) → OK」，
+    分数要等报告落盘才知道 —— 而「这一分是怎么来的」恰恰是这一阶段
+    最需要盯的东西。顺带把 judge 也标出来（LLM 还是规则降级）。
+    """
+    if not isinstance(payload, dict) or "score" not in payload:
+        return ""
+    who = "LLM" if payload.get("source") == "llm" else "规则降级"
+    return f" [{who} {payload['score']}/10]"
+
+
+
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -79,10 +94,34 @@ def run_interview(
     max_turns: int,
     model: str,
     verbose: bool = True,
+    use_llm_score: bool = True,
+    score_model: str | None = None,
 ) -> dict:
     api_key = os.environ.get("ZHIPU_API_KEY", "")
     llm = LLMClient(api_key=api_key, model=model, verbose=verbose)
-    toolbox = ToolBox(scenario_id)
+
+    # 评分器是一个**独立的客户端**，不是复用面试官那个。两个理由：
+    #
+    # ① **重试策略该不一样。** 面试官的重试是"必须成功"（整场对话不能断），
+    #    而评分失败可以降级成规则打分 —— 让它跟着面试官一起重试 4 次
+    #    （429 时总计 70 秒），等于拿整场面试去赌一道题的分。
+    #    run12 就是这么废掉的：一次评分限流，白卡 70 秒，后面整场跟着崩。
+    # ② **模型可以不同。** SCORE_MODEL 允许评分单独换模型 ——
+    #    既能错开限流（智谱的 429 是按"模型"报的：「**该模型**访问量过大」），
+    #    也让「出题的」和「判卷的」不再是同一个模型，评分视角更独立。
+    judge: LLMClient | None = None
+    if use_llm_score:
+        judge = LLMClient(
+            api_key=api_key,
+            model=score_model or model,
+            verbose=verbose,
+            max_retries=2,   # 10s + 20s 之后就放弃，快速降级
+        )
+
+    evaluator = AnswerEvaluator(
+        llm=judge, verbose=verbose, use_llm=use_llm_score, scenario_id=scenario_id
+    )
+    toolbox = ToolBox(scenario_id, evaluator=evaluator)
     candidate = CandidateSim(json.loads(answers_path.read_text(encoding="utf-8")))
 
     # --- 对话历史。这是 Agent 唯一的"记忆"，每一轮都整份发回给模型 ---
@@ -171,7 +210,8 @@ def run_interview(
                 flag = "OK " if ok else "ERR"
                 arg_hint = ",".join(f"{k}={v}" for k, v in list(args.items())[:3])
                 if verbose:
-                    log(turn, "🔧", f"调用 {name}({clip(arg_hint, 80)}) → {flag}")
+                    suffix = score_hint(payload) if name == "score_answer" else ""
+                    log(turn, "🔧", f"调用 {name}({clip(arg_hint, 80)}) → {flag}{suffix}")
 
                 # 工具结果塞回历史。失败也一样塞 —— 让模型知道发生了什么，
                 # 它下一轮会自己决定要不要换个参数再来一次。
@@ -245,14 +285,28 @@ def run_interview(
     if turn >= max_turns and not toolbox.finished:
         print(f"\n!! 达到最大轮数 {max_turns}，强制结束（模型没能自己收尾）")
 
+    # ★ 兜底交付：循环因 API 故障中止时，用已有记录出一份「不完整但真实」的报告。
+    #   run12 的经历：跑到第 17 轮撞限流，主循环 break，结果是 EXIT=1 + 报告为空，
+    #   前面 7 分钟、3 道题的真实评分全丢了 —— 而它们恰恰是这场运行最有价值的产物。
+    #   所以这里补一层：**宁可交一份残缺但真实的，也不要交一份空白。**
+    if error is not None and toolbox.report_path is None:
+        partial = toolbox.submit_partial_report(f"LLM 调用失败：{clip(error, 90)}")
+        if partial:
+            print(f"\n!! 面试中断，已用已完成的 {partial['graded']} 题生成部分报告：")
+            print(f"   {partial['report_path']}")
+
     summary = toolbox.summary()
+    judge_calls = judge.total_calls if judge else 0
     summary.update(
         {
             "turns": turn,
             "elapsed_sec": round(elapsed, 1),
-            "llm_calls": llm.total_calls,
-            "prompt_tokens": llm.total_prompt_tokens,
-            "completion_tokens": llm.total_completion_tokens,
+            "llm_calls": llm.total_calls + judge_calls,
+            "judge_calls": judge_calls,          # 其中评分调用占了几次
+            "prompt_tokens": llm.total_prompt_tokens
+            + (judge.total_prompt_tokens if judge else 0),
+            "completion_tokens": llm.total_completion_tokens
+            + (judge.total_completion_tokens if judge else 0),
             "error": error,
         }
     )
@@ -272,12 +326,25 @@ def run_interview(
         print(f"  工具调用次数    : {summary['tool_calls']}")
         print(f"  出题数 / 评分数 : {summary['questions_asked']} / {summary['answers_scored']}")
         print(f"  平均分          : {summary['avg_score']}")
+        llm_scored = summary.get("scored_by_llm", 0)
+        rule_scored = summary.get("scored_by_rule", 0)
+        print(f"  评分来源        : LLM {llm_scored} 题 / 规则降级 {rule_scored} 题")
         print(f"  结束原因        : {summary['finish_reason']}")
         print(f"  报告            : {summary['report_path']}")
         print(f"  耗时            : {summary['elapsed_sec']}s")
-        print(f"  LLM 调用 / token: {summary['llm_calls']} 次, "
+        print(f"  LLM 调用 / token: {summary['llm_calls']} 次"
+              f"（其中评分 {summary.get('judge_calls', 0)} 次）, "
               f"{summary['prompt_tokens']} in + {summary['completion_tokens']} out")
         print(f"  决策轨迹        : {trace_file}")
+
+        # 运行质量提示：一题都没通过 pick_question 出，说明模型没有走工具约定的路径
+        # （run13 就是这样：全程自己编题、编 id，最后批量补交 13 个评分全部被拦）。
+        # 这种运行**看起来是跑完了**（有轮数、有报告），但评分链路完全没生效 ——
+        # 不提示的话很容易被当成一次成功，是最危险的那种失败。
+        # 注意只说现象，不猜原因（也可能是提前中断导致根本没到出题环节）。
+        if summary["questions_asked"] == 0:
+            print("\n  ⚠️  整场面试没有通过 pick_question 出题，评分链路未生效")
+
         if not toolbox.report_path:
             print("\n  ⚠️  模型结束了面试但没有提交报告（没调 submit_report）")
 
@@ -294,7 +361,17 @@ def main() -> int:
     parser.add_argument("--scenario", default="backend_intern", help="场景 ID")
     parser.add_argument("--max-turns", type=int, default=30, help="最大轮数（保险丝）")
     parser.add_argument("--model", default=None, help="模型名，默认取 .env 里的 CHAT_MODEL")
+    parser.add_argument(
+        "--score-model",
+        default=None,
+        help="评分模型，默认与面试官相同。可用来错开限流，或换更强的模型判分",
+    )
     parser.add_argument("--quiet", action="store_true", help="只输出统计，不打过程")
+    parser.add_argument(
+        "--no-llm-score",
+        action="store_true",
+        help="用规则打分替代 LLM 评分（不额外调模型，适合调试流程时省额度）",
+    )
     args = parser.parse_args()
 
     load_dotenv(ROOT / ".env")
@@ -311,6 +388,8 @@ def main() -> int:
         max_turns=args.max_turns,
         model=model,
         verbose=not args.quiet,
+        use_llm_score=not args.no_llm_score,
+        score_model=args.score_model or os.environ.get("SCORE_MODEL") or None,
     )
     return 0 if summary.get("report_path") else 1
 

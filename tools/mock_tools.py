@@ -328,6 +328,56 @@ def mock_report_render(scenario_id: str, template: str, data: Dict[str, Any]) ->
     }
 
 
+#: 报告里显示的题型中文名
+_TRACK_LABELS = {
+    "coding": "算法题",
+    "system_design": "系统设计",
+    "project": "项目深挖",
+    "hr": "HR 行为面",
+}
+
+#: 评分维度的短标签（给报告读者看的，不是给模型看的）。
+#   注意它和 agent/evaluator.py 里的 DIMENSION_HINTS 是**两份不同的东西**：
+#   那边是「给模型的判分说明」（长、中性、要能覆盖多种题型），
+#   这边是「报告表格里的列名」（3~5 个字，塞得进一行）。
+#   混成一份的话，两边都会别扭。
+_DIM_LABELS = {
+    "data_structure_choice": "选型",
+    "time_complexity": "复杂度",
+    "edge_cases": "边界",
+    "code_clarity": "代码表达",
+    "correctness": "正确性",
+    "complexity": "复杂度",
+    "data_model": "数据模型",
+    "api_design": "接口设计",
+    "scalability": "扩展性",
+    "consistency": "一致性",
+    "tradeoff_analysis": "权衡取舍",
+    "completeness": "完整度",
+    "specificity": "具体性",
+    "technical_depth": "技术深度",
+    "impact": "结果影响",
+    "reflection": "反思",
+    "structure": "结构",
+    "highlight_match": "亮点匹配",
+    "authenticity": "真实度",
+    "time_control": "信息密度",
+    "sincerity": "真诚度",
+    "depth": "思考深度",
+    "match": "岗位匹配",
+    "stress_resistance": "抗压",
+    "analysis": "分析",
+    "communication": "沟通",
+    "decision_making": "决策",
+    "clarity": "清晰度",
+    "feasibility": "可行性",
+    "motivation": "动机",
+    "relevance": "切题",
+    "substance": "实质内容",
+    "fit": "匹配度",
+}
+
+
 def _render_markdown_report(data: Dict[str, Any]) -> str:
     """把数据渲染成 Markdown 报告。"""
     lines = []
@@ -336,7 +386,21 @@ def _render_markdown_report(data: Dict[str, Any]) -> str:
     lines.append(f"**候选人**: {data.get('candidate', '')}  ")
     lines.append(f"**目标岗位**: {data.get('target_role', '')}  ")
     lines.append(f"**面试日期**: {data.get('interview_date', '')}  ")
+    lines.append("")
+
+    # 中断兜底：这份报告是故障后补出来的，必须让人一眼看见，别当成完整结果读
+    if data.get("interrupted"):
+        lines.append("> ⚠️ **本次面试提前中断** —— 以下仅为已完成部分的结果，"
+                     "不代表完整面试表现。原因见文末「结论」。")
+        lines.append("")
+
     lines.append(f"**总体评分**: **{data.get('overall_score', 0)}** / 100")
+    if data.get("question_avg") is not None:
+        # ★ 两个数字并排显示，作用不一样：
+        #   总体分是模型的综合判断（含印象分），逐题均分是硬数据。
+        #   放在一起，读者一眼能看出两者是否自洽 ——
+        #   如果逐题都是 8 分而总体只有 60，那这个总体分就值得怀疑了。
+        lines.append(f"**逐题均分**: {data['question_avg']} / 10（由系统按逐题评分算出）")
     lines.append("")
 
     # 雷达
@@ -395,6 +459,63 @@ def _render_markdown_report(data: Dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"> {verdict}")
         lines.append("")
+
+    # ------------------------------------------------------------------
+    # 逐题评分明细（数据附录）
+    #
+    # ★ 这一块是**代码生成的硬数据**，不是模型写的 —— 这也是它存在的意义：
+    #   亮点/短板/建议都是模型的主观解读，读者没法验证；
+    #   而这里的每一分、每个维度、每条判分依据，都能逐条回溯到原答案。
+    #   有这块在，报告的"可信部分"和"解读部分"就分得开了。
+    # ------------------------------------------------------------------
+    rounds = data.get("rounds", [])
+    if rounds:
+        lines.append("## 逐题评分明细")
+        lines.append("")
+
+        track_avg = data.get("track_avg") or {}
+        if track_avg:
+            seg = " ・ ".join(
+                f"{_TRACK_LABELS.get(t, t)} {v}" for t, v in track_avg.items()
+            )
+            lines.append(f"- 分项均分：{seg}（10 分制）")
+
+        llm_n = sum(1 for r in rounds if r.get("source") == "llm")
+        if llm_n:
+            lines.append(f"- 评分来源：LLM 评分 {llm_n} 题，规则降级 {len(rounds) - llm_n} 题")
+        else:
+            lines.append("- 评分来源：全部为规则降级评分（LLM 评分未生效）")
+        lines.append("")
+
+        for i, r in enumerate(rounds, 1):
+            track = _TRACK_LABELS.get(str(r.get("track")), str(r.get("track") or ""))
+            title = " ".join(str(r.get("question") or "").split())
+            lines.append(f"### {i}. {title[:46]} · {track} · **{r.get('score')} / 10**")
+            lines.append("")
+
+            dims = r.get("dimensions") or {}
+            weights = r.get("weights") or {}
+            if dims:
+                bits = []
+                for key, rate in dims.items():
+                    label = _DIM_LABELS.get(key, key)
+                    weight = weights.get(key)
+                    suffix = f"（权重 {weight:g}）" if isinstance(weight, (int, float)) else ""
+                    try:
+                        bits.append(f"{label} `{float(rate):.2f}`{suffix}")
+                    except (TypeError, ValueError):
+                        bits.append(f"{label} `{rate}`{suffix}")
+                lines.append("- 维度得分：" + " · ".join(bits))
+
+            comment = r.get("comment")
+            if comment:
+                lines.append(f"- 点评：{comment}")
+
+            evidence = r.get("evidence_refs") or []
+            if evidence:
+                quote = " ".join(str(evidence[0]).split())[:80]
+                lines.append(f"- 判分依据：「{quote}」")
+            lines.append("")
 
     return "\n".join(lines)
 
