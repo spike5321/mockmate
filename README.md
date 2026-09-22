@@ -5,7 +5,7 @@
 > 这是一个**自研的 LLM Agent 调度循环**：模型自己决定下一步做什么——读简历、检索岗位情报、出题、追问、打分、交报告、结束，
 > 循环什么时候停也由它判断。**决策循环是这个仓库自己写的代码，不依赖任何 Agent 框架。**
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-136%20passed-brightgreen)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-261%20passed-brightgreen)
 
 ### ▶ 先看这个：一次真实运行的完整回放
 
@@ -67,7 +67,7 @@ flowchart TD
 
     THINK -->|end_interview| FINISH["退出循环"]
     TOOLS["8 个工具"] -.->|"进程内直调"| DISPATCH
-    KB["kb/ · 向量检索层"] -.->|"Chroma + 可换的 embedding（智谱 / 本地）"| TOOLS
+    KB["kb/ · 混合检索层"] -.->|"向量 + BM25 两路融合<br/>embedding 可换（智谱 / 本地）"| TOOLS
     JUDGE["独立评分模型"] -.->|"max_retries=2 · 失败降级"| TOOLS
     FINISH --> OUT["报告 + 决策轨迹落盘"]
 ```
@@ -86,16 +86,21 @@ flowchart TD
 | 文件 | 职责 | 一句话 |
 |---|---|---|
 | `orchestrator.py` | **主循环** | 组装请求 → 模型决策 → 执行工具 / 候选人作答 → 写回 → 循环 |
-| `agent/llm.py` | LLM 客户端 | requests 直打 OpenAI 兼容端点，含统一指数退避重试；`chat()` + `embed()` |
+| `agent/llm.py` | LLM 客户端 | requests 直打 OpenAI 兼容端点，含统一指数退避重试与错误分类；`chat()` + `embed()` |
+| `agent/providers.py` | 供应商注册表 | 按模型名认出该去哪个端点、Key 读哪个环境变量（换厂商不用改代码） |
+| `agent/checkpoint.py` | 断点续跑 | 每一轮落盘；`--resume` 接着跑，跑挂了不用从头开始 |
 | `agent/tools.py` | 8 个工具 + `ToolBox` | 工具的 JSON Schema 说明书 + 会话状态 + `dispatch()` |
 | `agent/prompts.py` | 系统提示词 | 面试官的行为准则（由平台时代的 `Agent.md` 改写而来） |
 | `agent/candidate.py` | 模拟候选人 | 题库题按 id 精确匹配，追问题按**话题池**作答，池子轮完一圈会认输 |
 | `agent/evaluator.py` | 单题评分器 | LLM 判断维度达成度 → 代码算加权总分 → 失败降级为规则打分 |
 | `kb/embed.py` | 向量化入口 | 按 `EMBEDDING_PROVIDER` 分发到智谱 / 本地模型，**建库和检索共用这一份** |
 | `kb/store.py` | 知识库入库 | 按 markdown 标题切小节 → 向量化 → 写 Chroma |
-| `kb/search.py` | 检索层 | `retrieve(query, k)` 返回片段 + 相似度；库和配置不是一套时明确报错 |
+| `kb/bm25.py` | 关键词检索 | 中文按字符二元组切词（零依赖），专有名词靠它才捞得准 |
+| `kb/fusion.py` | 两路融合 | 默认归一化加权求和；等权 RRF 保留为可选，实测比单路还差（见第 3 节） |
+| `kb/search.py` | 检索层 | `retrieve(query, k, mode, fusion)` 返回片段 + 相似度 + 召回来源；库和配置不是一套时明确报错 |
 | `kb/build.py` | 建库 CLI | `python -m kb.build [--rebuild] [--show] [--provider local]` |
 | `knowledge/*.md` | 面试情报语料 | 面试流程 / Redis 考点 / HTTP 考点 / 系统设计框架 |
+| `scripts/compare_retrieval.py` | 检索质量对照 | 20 个带标注查询 × 五种模式的 Hit@1 / Hit@3 / MRR，用来验证"改进"是不是真的 |
 | `tools/mock_tools.py` | 场景数据 + 报告渲染 | 题库、简历、JD，以及 markdown 报告的生成 |
 
 ### 8 个工具
@@ -179,6 +184,50 @@ flowchart TD
 本地模型的价值不在准确率，在**免 Key 免网络** ——
 评审 clone 下来不填任何配置，检索这一层也能跑起来。
 
+### 混合检索：加了关键词这一路之后（对照实测）
+
+向量路比的是**语义**，但它对**专有名词**很弱（「RDB」「Redlock」「TIME_WAIT」在向量空间里
+和周边概念挤成一团）。所以补了一路 BM25 关键词检索。加了这一层到底有没有用，得量。
+
+20 个带标注的查询（每条都对应语料里一个具体小节），五种模式各跑一遍。
+语料 4 篇 / 33 片段，向量模型用本地 `bge-small-zh-v1.5`：
+
+| 模式 | Hit@1 | Hit@3 | MRR | 专有名词型 Hit@1 | 换说法型 Hit@1 |
+|---|---|---|---|---|---|
+| 向量单路（= 加这一层之前） | 50% | 75% | 0.617 | 50% | 50% |
+| 关键词单路（BM25） | 70% | 85% | 0.767 | **80%** | 60% |
+| **混合（默认：归一化加权求和）** | **70%** | **85%** | **0.767** | 70% | **70%** |
+| 混合（第一版实现：等权 RRF） | 60% | 80% | 0.700 | 70% | 50% |
+
+- 「专有名词型」= 查询里写了目标小节的关键术语；「换说法型」= 一个都没写，只能靠语义对上。
+
+怎么读这张表：
+
+- **混合没有把总体命中率抬起来** —— 它和最强的单路（关键词路）打平。
+  所以「混合检索一定更好」这话是错的，**别写进简历**。
+- 它真正补上的是**换说法型**：70%，而两个单路最好只有 60%。
+  这正是加这一层的初衷 —— 语义路补关键词路的短板，而不是反过来。
+- 它在任何一个族里都**不低于**任一单路（最低也是持平）。
+- **第一版实现（等权 RRF）比两个单路都差。** 这条值得单独讲，见下。
+
+为什么把 RRF 换掉：RRF 给每路的第 1 名都记 `1/(k+1)` 分 ——
+**两路的第一名必然同分**，于是两路意见不一致时，谁在前只能靠 id 排序碰运气。
+想靠调小 `k` 让名次起作用？从 1 扫到 60，Hit@1 全是 60%，纹丝不动：
+`k` 调大了，8 条列表里第 1 名和第 8 名只差 11%（1/61 vs 1/68），融合退化成"数一条片段出现在几路里"；
+`k` 调小了，第一名打平的问题更突出。换成"每路各自归一化到 0~1 再等权相加"就没有这个死结。
+
+**老实交代证据强度**：70% 和 60% 的差别是 20 个查询里的 2 个，
+**算不上「更准」的统计证据**。站得住的是那条结构性区别（第一名必然同分），它有单测钉住。
+给关键词路加权重能把 Hit@3 刷到 90%，但那个假设（"关键词路更强"）换个语料就不成立，
+属于过拟合这份语料，所以**刻意给两路等权**。
+
+复现：`python scripts/compare_retrieval.py`（基线是**从 git 历史原样抄**的旧实现，
+不是凭印象重写的近似版；脚本开头会自检基线是否仍然成立，对不上就拒绝出结论）。
+
+未实测：全部数字来自**本地**向量模型。智谱 `embedding-3` 那一路本轮因限流没跑，
+换 provider 后两路的强弱关系可能变化，结论要重跑 —— 这也是等权 RRF 没删、
+保留成 `fusion="rrf"` 选项的原因。
+
 ---
 
 ## 4. 快速开始
@@ -223,7 +272,7 @@ python e2e_test.py     # 离线跑一遍工具链路，不调模型、不消耗�
 ### 跑测试
 
 ```bash
-python -m pytest tests -v     # 136 项，离线，不需要 API Key
+python -m pytest tests -v     # 261 项，离线，不需要 API Key，实测 1.75 秒
 ```
 
 单测只覆盖**确定性**的部分——也就是"能被机器判定对错"的那些：
@@ -233,13 +282,21 @@ python -m pytest tests -v     # 136 项，离线，不需要 API Key
 | `tests/test_tools.py` | 入参校验（非法 track/difficulty/stage 必须被拦）、`pending_question` 状态流转、业务错误不能被当成成功、自拟题 id 生成、评分落账、报告总体分与逐题分对齐、检索失败 ≠ 检索为空 |
 | `tests/test_evaluator.py` | 从模型的自由发挥里抠 JSON、量纲归一（0.8 / 8 / 80 / "0.8"）、键名模糊匹配、加权计算、**覆盖率 < 60% 判失败**、熔断器、缓存、降级标记 |
 | `tests/test_kb.py` | 按标题切分且不串知识点、无空行文本退回按行切、超长段落硬切带重叠、片段 id 内容指纹、`distance → 相似度` 换算、**库和配置不是一套时必须明确失败** |
+| `tests/test_hybrid.py` | 中文二元组切词（`B+树` / `C++` 这类符号词不能被切散）、BM25 的 IDF 与同分稳定性、两种融合算法的排序不变量、**两路第一名在等权 RRF 下必然同分**（钉住的是一条已知短板） |
 | `tests/test_embed.py` | provider 的选择与降级规则（有 Key 用智谱 / 没 Key 用本地 / 显式指定绝不许静默降级）、签名能区分 provider 与模型、两个 Windows 坑（HF 软链接开关、缓存不能落在系统临时目录） |
+| `tests/test_providers.py` | 按模型名认供应商、显式指定优先于猜测、Key 读哪个环境变量、`safe_repr()` 与 `describe_all()` 打印端点时**都不能带出 Key** |
+| `tests/test_llm.py` | 错误分类（限流 / 网络 / 认证 / 参数 / 服务端，含平台错误码与中文关键词）、不可重试的状态立刻失败、重试耗尽后保留最后一次原因、**本地端点不走系统代理** |
+| `tests/test_checkpoint.py` | 断点存取往返一致、临时文件不残留、格式版本不匹配明确拒绝、`latest_unfinished` 跳过已完成与损坏的文件、ToolBox 与候选人状态能还原 |
+| `tests/test_escalation.py` | 什么情况自动换备选模型（**认证失败不换**）、菜单选项解析（空输入 / 未知输入 / EOF / Ctrl-C 都算放弃）、备选模型只从同一供应商里挑 |
+| `tests/test_orchestrator.py` | 主循环行为：连续 3 轮无工具调用要提醒、正常面试不能误报、提醒只说一次 |
 
-三条刻意写进测试的**设计约束**（以后有人"顺手"改掉会立刻红）：
+四条刻意写进测试的**设计约束**（以后有人"顺手"改掉会立刻红）：
 
 - 评分请求里**只有「系统提示 + 这一道题」**，不带整场对话历史——`test_scoring_prompt_has_no_conversation_history`
 - 降级打分必须**标出来**，不能假装没降级——`test_fallback_marks_reason_that_it_is_degraded`
 - 题库里每个评分维度在提示词里都**必须有中文释义**——`test_every_bank_rubric_dimension_has_a_hint`
+- 两路各自的第一名在等权 RRF 下**必然同分**——`test_rrf_keeps_a_doc_found_by_only_one_route`
+  （这条钉的是**短板**不是设计，它正是默认融合不用 RRF 的原因）
 
 > 单测不碰真实 LLM 调用：评分器用一个假客户端顶替，报告落盘写到临时目录
 > （否则每跑一次测试就把仓库里那份真实报告覆盖掉）。
@@ -249,11 +306,27 @@ python -m pytest tests -v     # 136 项，离线，不需要 API Key
 | 参数 | 作用 |
 |---|---|
 | `--scenario` | 场景 ID，目前有 `backend_intern` |
+| `--provider` | 供应商 `zhipu` / `deepseek` / `ollama`。默认**按模型名自动判断**，一般不用给 |
 | `--model` | 面试官模型，默认取 `.env` 里的 `CHAT_MODEL` |
 | `--score-model` | 评分模型，默认与面试官相同。可用来错开限流，或换更强的模型判分 |
 | `--no-llm-score` | 用规则打分替代 LLM 评分，调试流程时省额度 |
 | `--max-turns` | 最大轮数（保险丝），默认 30 |
 | `--quiet` | 只输出统计，不打过程 |
+
+**跑挂了不用从头开始**（这三个是阶段 5 加的）：
+
+| 参数 | 作用 |
+|---|---|
+| `--resume [RUN]` | 从断点续跑。不给值就接最近一个没跑完的 |
+| `--list-runs` | 列出本地有哪些断点文件 |
+| `--fallback-model` | 模型罢工时自动换过去接着跑（默认取 `.env` 里的 `FALLBACK_MODEL`） |
+| `--no-interactive` | 出故障时不问人，直接用已有记录出一份「不完整但真实」的报告（无人值守时用） |
+
+不发起面试、看一眼环境是否就绪：
+
+```bash
+python orchestrator.py --list-providers     # 有哪些供应商、Key 配没配、向量库建了没
+```
 
 退出码：`0` = 报告已生成，`1` = 没生成报告（两者都可能是"跑完了"，看报告才准）。
 
@@ -292,6 +365,10 @@ python -m pytest tests -v     # 136 项，离线，不需要 API Key
 同一个作者写的 [`rag-knowledge-assistant`](https://github.com/spike5321/rag-knowledge-assistant)
 是**同一套检索层的独立形态**（本项目的 `kb/` 就是它的内嵌形态，切分算法一份、两边同步）：
 在里面检索是**固定管线**，`retrieve → 拼 prompt → 生成`，模型的权限只到"写答案"为止。
+
+> 有个例外要说清楚：`kb/` 后来**多加了 BM25 关键词路和融合**，
+> `rag-knowledge-assistant` 那边还没有这两块 —— 所以现在只有**切分算法**是同源的，
+> 检索部分已经不是同一份代码了。改切分时要两边同步。
 
 差别不在代码，在**调用方式**。在 MockMate 里，检索是一个**工具**：模型自己决定**查什么**、查几次、拿到片段怎么用。
 实测这一场里模型自发检索了两次，query 是自然语言：
@@ -373,19 +450,25 @@ python -m pytest tests -v     # 136 项，离线，不需要 API Key
 mockmate/
 ├── orchestrator.py              # ★ 主循环（这个项目的核心）
 ├── agent/                       # Agent 运行时
-│   ├── llm.py                   #   LLM 客户端（chat + embed + 重试）
+│   ├── llm.py                   #   LLM 客户端（chat + embed + 重试 + 错误分类）
+│   ├── providers.py             #   供应商注册表（按模型名认端点、认 Key 变量名）
+│   ├── checkpoint.py            #   断点续跑（每轮落盘，--resume 接着跑）
 │   ├── tools.py                 #   8 个工具的 Schema 与调度
 │   ├── prompts.py               #   面试官系统提示词
 │   ├── candidate.py             #   模拟候选人（话题感知 + 会认输）
 │   └── evaluator.py             #   单题 LLM 评分器
-├── kb/                          # 向量检索层
-│   ├── store.py                 #   切分 + 入库
-│   ├── search.py                #   检索
+├── kb/                          # 检索层（混合检索）
+│   ├── embed.py                 #   向量化唯一入口（智谱 / 本地模型）
+│   ├── store.py                 #   按标题切分 + 入库
+│   ├── bm25.py                  #   关键词路（中文二元组切词，零依赖）
+│   ├── fusion.py                #   两路融合（默认归一化加权求和）
+│   ├── search.py                #   检索入口 retrieve()
 │   └── build.py                 #   建库 CLI
 ├── knowledge/                   # 面试情报语料（4 篇 markdown）
 ├── scenarios/                   # 场景数据：简历 + JD + 题库 + 候选人脚本
 ├── tools/mock_tools.py          # 场景加载 + markdown 报告渲染
 ├── tools/build_replay.py        # 从轨迹 + 报告生成运行回放页（单文件 HTML）
+├── scripts/compare_retrieval.py # 检索质量对照（改动前后可复现地比）
 ├── docs/
 │   ├── architecture.md          # 架构说明
 │   ├── replay/index.html        # ★ 运行回放页（构建产物，可直接双击打开）
@@ -421,9 +504,12 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
 - **没有实时 Web 界面**，只有命令行。面试过程是流式打印在终端里的。
   运行回放页（`docs/replay/`）是**事后播放一份静态轨迹**，不是实时界面 —— 真正的 Web 界面在路线图阶段 6。
 - **免费模型在晚高峰会被平台级限流**。调试时不要背靠背连续跑整轮面试，中间留几十秒。
-- **知识库很小**：4 篇语料、33 个片段。向量化支持智谱 `embedding-3`（2048 维）
-  和本地 `bge-small-zh-v1.5`（512 维）两种，默认「有 Key 用智谱、没 Key 用本地」。
-  换模型必须 `python -m kb.build --rebuild` —— 理由见第 3 节那张对照表。
+- **知识库很小**：4 篇语料、33 个片段。检索是**向量 + BM25 混合**（默认融合算法是归一化加权求和，
+  另有等权 RRF 可选）。向量化支持智谱 `embedding-3`（2048 维）和本地 `bge-small-zh-v1.5`（512 维）两种，
+  默认「有 Key 用智谱、没 Key 用本地」。换模型必须 `python -m kb.build --rebuild` —— 理由见第 3 节那张对照表。
+- **混合检索的实测只覆盖了本地向量模型**（智谱那一路本轮因限流没跑）。
+  换 embedding 后两路的强弱关系可能变化，第 3 节那些数字要重跑。
+  语料量级也偏小（33 片段），足以看出方向，不足以支撑精确结论。
 - **`--provider ollama` 没有真装过本地模型**：代码路径是通的，也验证到「本地服务没起来时，
   错误被正确归类为 network」这一步（顺带修掉一个真 bug —— 本地端点原先会走系统代理，
   被伪装成 HTTP 502）。但 **7B 本地模型出的题好不好、跑一场多久，没有实测数据**，
@@ -441,13 +527,20 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
 - [x] **阶段 4** 门面
   - [x] README 重写 + mermaid 架构图 + 实测数据（取自 `traces/`，可审计）
   - [x] `docs/architecture.md` 重写为可上手版本
-  - [x] pytest 单测 136 项（离线、不花额度）
+  - [x] pytest 单测（离线、不花额度）—— 现在 261 项
   - [x] **运行回放页**（`docs/replay/`，单文件静态 HTML，由轨迹生成）+ GitHub Pages
   - [x] 旧目录归档到 `legacy/`、`.mailmap` 统一贡献者身份
   - [x] **本地 embedding 兜底**：不填 Key 也能建库、能检索（免 Key 免网络）
   - [ ] Demo 录屏 GIF（可选，回放页已覆盖大部分需求）
-- [ ] **阶段 5** 多模型路由：模型切换 + 限流时中断询问用户 + checkpoint 断点续跑；向量 + BM25 混合检索
+- [x] **阶段 5** 多模型路由 + 检索升级
+  - [x] 错误分类（限流 / 网络 / 认证 / 参数 / 服务端，各自不同的处理策略）
+  - [x] 供应商注册表 + 按模型名自动认端点（换厂商不用改代码）
+  - [x] **断点续跑**：跑挂了 `--resume` 接着跑，不用从头开始
+  - [x] 中断问人 / 自动降级，以及出故障时兜底出一份「不完整但真实」的报告
+  - [x] **向量 + BM25 混合检索**（含实测对照，见第 3 节）
 - [ ] **阶段 6** Web 界面（Streamlit）：侧栏选模型、填 Key、实时看面试过程
+  - 顺带做「用户临时填自己的模型凭据」—— 现在的 `kb/embed.py` / 供应商注册表已经就位，
+    只差界面和一条纪律：**Key 只活在内存里，不写 `.env`、不进 checkpoint、不进 trace**
 
 ---
 

@@ -24,31 +24,35 @@ flowchart TB
         MAIN["主循环<br/>决策 · 分发 · 状态推进 · 预算提醒 · 收尾"]
     end
     subgraph L2["Agent 运行时 · agent/"]
-        LLM["llm.py<br/>LLMClient.chat / embed"]
+        LLM["llm.py<br/>LLMClient.chat / embed<br/>重试 · 错误分类"]
+        PROV["providers.py<br/>供应商注册表"]
         TOOLS["tools.py<br/>TOOL_SCHEMAS + ToolBox"]
         PROMPT["prompts.py<br/>系统提示词"]
         CAND["candidate.py<br/>CandidateSim"]
         EVAL["evaluator.py<br/>AnswerEvaluator"]
+        CKPT["checkpoint.py<br/>断点续跑"]
     end
     subgraph L3["能力层"]
-        KB["kb/ · 向量检索"]
+        KB["kb/ · 混合检索<br/>向量 + BM25 两路融合"]
         DATA["scenarios/ · 简历 题库 候选人脚本"]
         REND["tools/mock_tools.py · 报告渲染"]
     end
     subgraph L4["外部依赖"]
-        ZHIPU["智谱 OpenAI 兼容端点<br/>chat/completions · embeddings"]
+        VENDOR["任意 OpenAI 兼容端点<br/>智谱 / DeepSeek / 本地 ollama<br/>chat/completions · embeddings"]
         CHROMA["Chroma 持久化向量库<br/>.kb/"]
     end
     MAIN --> LLM
     MAIN --> TOOLS
     MAIN --> PROMPT
     MAIN --> CAND
+    MAIN --> CKPT
+    LLM --> PROV
     TOOLS --> EVAL
     TOOLS --> KB
     TOOLS --> DATA
     TOOLS --> REND
     KB --> CHROMA
-    LLM --> ZHIPU
+    LLM --> VENDOR
 ```
 
 **分层原则只有一条**：下层不知道上层的存在。
@@ -151,8 +155,11 @@ while turn < max_turns and not toolbox.finished:
 
 ```
 knowledge/*.md  --(按 markdown 标题切小节)-->  chunks  --(kb/embed.py)-->  Chroma(.kb/, cosine)
-                                                                                 ↑
-            面试官调 search_jd_kb(query)  --(同一个 embed_texts())-->  向量查询 → top-k 片段
+                                                                                  ↓
+            面试官调 search_jd_kb(query) ──┬─ 向量路（语义，能对上换个说法的问法）──┤
+                                           └─ 关键词路 BM25（字面，专有名词更可靠）──┤
+                                                                                  ↓
+                                                          kb/fusion.py 融合 → top-k 片段
 ```
 
 **和固定管线的分界线**：这里的检索结果不是被拼进 prompt 送给"答案生成器"，
@@ -160,6 +167,37 @@ knowledge/*.md  --(按 markdown 标题切小节)-->  chunks  --(kb/embed.py)--> 
 
 检索层不抛异常：库是空的时候 `retrieve()` 返回 `[]`，由调用方回退到内置的少量情报。
 "库没建"是**正常状态**，不是错误。
+
+### 两路召回，为什么
+
+向量路比**语义**：问「缓存击穿怎么答」能命中写着「热点 key 失效」的段落。
+但它对**专有名词**很弱 ——「RDB」「Redlock」「TIME_WAIT」这类词在向量空间里和周边概念挤成一团。
+
+关键词路（`kb/bm25.py`）正好补这一路：只看词有没有出现、出现几次、这个词在语料里有多稀有。
+中文切词用**字符二元组**，不引 jieba —— 那要带一个几十 MB 的词典，和"clone 下来就能跑"相冲。
+「缓存击穿」→ 缓存 / 存击 / 击穿，对专有名词精确命中足够用，且零依赖。
+
+两种模式可以单独用：`retrieve(q, mode="vector" | "bm25" | "hybrid")`，默认 `hybrid`。
+
+### 融合算法：为什么默认不是 RRF（`kb/fusion.py`）
+
+第一版按教科书写了等权 RRF。**跑 20 个带标注的查询一量，它比两个单路都差**
+（Hit@1 60%，关键词单路 70%）。原因不是 RRF 不好，是它和这种小列表不匹配：
+
+- RRF 给每路的第 1 名都记 `1/(k+1)` 分 → **两路的第一名必然同分**，
+  两路意见不一致时，谁在前只能靠 id 排序碰运气。
+- 调 `k` 救不了：从 1 扫到 60，Hit@1 全是 60%。`k` 调大，8 条列表里第 1 名和第 8 名
+  只差 11%（1/61 vs 1/68），融合退化成"数一条片段出现在几路里"；`k` 调小，第一名打平更突出。
+
+现在默认 `normalized_sum`：每路**各自** min-max 归一化到 0~1 再等权相加。
+名次差异被完整保留，两路又归到同一尺度，可以相加。
+实测 Hit@1 70% / Hit@3 85%，与最强单路持平，**换说法型查询上 70%（单路最好 60%）** ——
+那才是加这一层的初衷。完整对照表见 README 第 3 节。
+
+三点如实说明：① 70% 与 60% 只差 20 个查询里的 2 个，不足以宣称"更准"，
+站得住的是"第一名必然同分"那条结构性区别（有单测钉住）；
+② 刻意给两路**等权** —— 给关键词路加权能把 Hit@3 刷到 90%，但那是过拟合这份语料；
+③ 等权 RRF 没删，保留成 `fusion="rrf"`，换语料或换向量模型后还要重比。
 
 ### 向量化是谁算的（`kb/embed.py`）
 
@@ -251,16 +289,21 @@ score_answer(question_id, answer)
 | 想改什么 | 改哪 |
 |---|---|
 | 循环行为、预算提醒、中断策略 | `orchestrator.py` |
-| 重试策略、超时、换供应商 | `agent/llm.py`（`RETRY_BASE` / `DEFAULT_BASE_URL`） |
+| 重试策略、超时、错误分类 | `agent/llm.py`（`RETRY_BASE`） |
+| 供应商怎么认、Key 的变量名 | `agent/providers.py`（注册表） |
+| 断点存什么、怎么续 | `agent/checkpoint.py` |
 | 加工具、改入参校验 | `agent/tools.py`（`TOOL_SCHEMAS` + `ToolBox`） |
 | 面试官行为准则 | `agent/prompts.py` |
 | 候选人的回答和"认输"时机 | `agent/candidate.py` + `scenarios/*.answers.json` |
 | 评分标准、维度、降级门槛 | `agent/evaluator.py` |
 | 切分粒度、入库 | `kb/store.py` |
-| 检索条数、相似度 | `kb/search.py` |
+| 检索条数、两路怎么配合 | `kb/search.py` |
+| 中文切词、BM25 参数（`K1` / `B`） | `kb/bm25.py` |
+| 融合算法与权重 | `kb/fusion.py`（默认 `norm`，另有 `rrf`） |
 | 语料 | `knowledge/*.md` → 改完跑 `python -m kb.build --rebuild` |
 | 报告长什么样 | `tools/mock_tools.py`（`_render_markdown_report`） |
 | 运行回放页长什么样 | `tools/build_replay.py` → 改完跑 `python tools/build_replay.py` 重新生成 |
+| 检索质量有没有变差 | `python scripts/compare_retrieval.py`（20 个带标注查询的对照） |
 
 ### 运行回放页怎么来的
 
@@ -282,16 +325,19 @@ docs/examples/run14_report.json ─┘
 ### 改完怎么验证
 
 ```bash
-python -m pytest tests -v     # 136 项，离线，不需要 API Key，约 1.2 秒
+python -m pytest tests -v     # 261 项，离线，不需要 API Key，实测 1.75 秒
 python e2e_test.py           # 工具链路端到端自检（也不调模型）
 ```
 
 `tests/` 只测确定性逻辑，所以加功能时**先往这里加一条测试**比先跑整场面试划算得多
-（整场面试要花额度、还会撞限流）。三条被测试钉住的设计约束：
+（整场面试要花额度、还会撞限流）。四条被测试钉住的设计约束：
 
 - 评分请求不带对话历史（防光环效应）—— `test_evaluator.py::test_scoring_prompt_has_no_conversation_history`
 - 降级打分必须打上 `source=rule-fallback` —— `test_tools.py::test_record_carries_source_and_dimensions`
 - 题库里每个评分维度在提示词里都有中文释义 —— `test_evaluator.py::test_every_bank_rubric_dimension_has_a_hint`
+- 两路各自的第一名在等权 RRF 下**必然同分** —— `test_hybrid.py::test_rrf_keeps_a_doc_found_by_only_one_route`
+  （这条钉的是一个**已知短板**，不是设计。它正是默认融合不用 RRF 的原因，
+  改断言前先看 `scripts/compare_retrieval.py` 的数字）
 
 > 加工具时最容易忘的一件事：写了 `TOOL_SCHEMAS` 却忘了写 `_t_<工具名>`。
 > `test_tools.py::test_schema_names_have_implementations` 会替你发现。
@@ -309,8 +355,13 @@ python e2e_test.py           # 工具链路端到端自检（也不调模型）
 5. **换 embedding** —— 已经抽好 provider 层（`kb/embed.py`）：改 `EMBEDDING_PROVIDER`
    或 `LOCAL_EMBEDDING_MODEL` 即可，建库和检索同时生效。换完记得 `--rebuild` ——
    注意真正的理由不是"维度可能对不上"，而是**向量空间不可比**。
-6. **多模型路由** —— 供应商注册表 + 错误分类 + 限流时中断询问用户 + checkpoint 断点续跑（路线图阶段 5）。
-7. **Web 界面** —— `orchestrator.py` 的核心函数 `run_interview()` 与打印逻辑是分开的，可以直接被 Streamlit 调用。
+6. **加一路召回** —— `kb/fusion.py` 的 `fuse()` 收的是 `[(id, 分数)]` 列表，
+   加第三路（比如标题匹配、同义词扩展）就是多传一个列表。换融合算法则实现一个函数、
+   挂到 `FUSIONS` 上。**但改完必须跑 `python scripts/compare_retrieval.py`** ——
+   这里踩过一次：等权 RRF 看着最"标准"，实测比单路还差。别凭感觉说变好了。
+7. **换供应商 / 换模型** —— 注册表在 `agent/providers.py`（按模型名自动认端点、
+   认 Key 的变量名），错误分类在 `agent/llm.py`，断点续跑在 `agent/checkpoint.py`。
+8. **Web 界面** —— `orchestrator.py` 的核心函数 `run_interview()` 与打印逻辑是分开的，可以直接被 Streamlit 调用。
 
 ---
 
