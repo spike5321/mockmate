@@ -50,7 +50,14 @@ def offline_runs(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _run(monkeypatch, answers_path, reply_fn, max_turns: int = 6) -> dict:
+def _run(
+    monkeypatch,
+    answers_path,
+    reply_fn,
+    max_turns: int = 6,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> dict:
     import orchestrator
 
     monkeypatch.setattr(LLMClient, "chat", reply_fn)
@@ -62,6 +69,8 @@ def _run(monkeypatch, answers_path, reply_fn, max_turns: int = 6) -> dict:
         verbose=True,
         use_llm_score=False,
         interactive=False,
+        api_key=api_key,
+        base_url=base_url,
     )
 
 
@@ -138,3 +147,55 @@ def test_silence_counter_resets_after_a_tool_call(
     )
 
     assert "不支持 function calling" not in capsys.readouterr().out
+
+
+# ===========================================================================
+# 临时凭据（Web 界面里填的那种）
+# ===========================================================================
+
+
+def test_temp_credentials_work_without_any_env_key(
+    monkeypatch, sandbox_scenarios, offline_runs, capsys
+):
+    """★ 环境里一个 Key 都没有，只靠临时凭据也得能把整场跑起来。"""
+    monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
+
+    summary = _run(
+        monkeypatch,
+        sandbox_scenarios / "backend_intern.answers.json",
+        _uses_tools,
+        max_turns=3,
+        api_key="sk-temp-secret",
+    )
+
+    assert summary["turns"] > 0                     # 真的跑起来了，不是一上来就认证失败
+    assert "sk-temp-secret" not in capsys.readouterr().out
+
+
+def test_temp_key_never_reaches_disk(
+    monkeypatch, sandbox_scenarios, offline_runs, capsys
+):
+    """★★ Key 的纪律：临时凭据和从环境变量读到的 Key 一样，只活在内存里。
+
+    断点和轨迹都是**要落盘**的，而轨迹还会被提交进仓库 ——
+    这两样东西里出现 Key 就是事故。跑完整场之后把它们翻一遍。
+
+    这条测试的价值在于它检查的是"没有发生的事"：以后谁顺手往断点里
+    加一个 `"endpoint": endpoint`，这里立刻会红。
+    """
+    monkeypatch.delenv("ZHIPU_API_KEY", raising=False)
+
+    _run(
+        monkeypatch,
+        sandbox_scenarios / "backend_intern.answers.json",
+        _uses_tools,
+        max_turns=3,
+        api_key="sk-temp-secret",
+    )
+    capsys.readouterr()
+
+    written = sorted(offline_runs.rglob("*.json"))
+    assert written, "应该至少落了断点和轨迹，否则这条测试什么也没检查到"
+    for path in written:
+        text = path.read_text(encoding="utf-8")
+        assert "sk-temp-secret" not in text, f"{path} 里出现了 Key"

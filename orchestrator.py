@@ -291,10 +291,26 @@ def run_interview(
     resume_state: dict | None = None,
     fallback_model: str | None = None,
     interactive: bool = True,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> dict:
+    """跑一场面试。
+
+    `api_key` / `base_url` 是**临时凭据**（Web 界面里那个输入框给的）。
+    不传就完全按环境变量走 —— 命令行一直是这条路。
+
+    ★ 临时凭据的边界，写在这里免得以后有人猜：
+      · 它替代的是"从环境变量里找 Key"这一步，优先级：临时 > 环境变量 > 注册表默认
+      · 它**只活在内存里**：不写 .env、不进断点、不进 trace、不进日志
+      · 它对面试官**和评分官**都生效 —— 用户既然给了自己的凭据，
+        通常就是想让整场都走它（评分官若属于另一家而报错，会自动降级成规则打分）
+      · **不影响向量化**：kb/ 那边仍按环境变量走，没有 ZHIPU_API_KEY 就用本地模型
+    """
     # 端点和 Key 都交给供应商注册表解析 —— 这一层不该知道
     # "Key 存在 ZHIPU_API_KEY 里"这种细节，那是 providers.py 的知识。
-    llm = LLMClient.from_provider(model=model, provider=provider, verbose=verbose)
+    llm = LLMClient.from_provider(
+        model=model, provider=provider, verbose=verbose, api_key=api_key, base_url=base_url
+    )
 
     # 换过模型之后，老客户端的用量要结转过来 —— 否则统计里只看得见"最后那个模型"
     # 烧了多少，前面几次调用凭空消失。而这个数字是要写进报告的，不能偏。
@@ -317,6 +333,8 @@ def run_interview(
             model=score_model or model,
             verbose=verbose,
             max_retries=2,   # 10s + 20s 之后就放弃，快速降级
+            api_key=api_key,
+            base_url=base_url,
         )
 
     evaluator = AnswerEvaluator(
@@ -412,7 +430,11 @@ def run_interview(
 
         if new_model:
             model = new_model
-        llm = LLMClient.from_provider(model=model, provider=provider, verbose=verbose)
+        # 临时凭据要跟着换过去的模型走 —— 否则"限流后自动换模型"会突然丢掉
+        # 用户在界面上填的 Key，表现成一次莫名其妙的认证失败。
+        llm = LLMClient.from_provider(
+            model=model, provider=provider, verbose=verbose, api_key=api_key, base_url=base_url
+        )
 
         toolbox.notes.append(note)
         if verbose:

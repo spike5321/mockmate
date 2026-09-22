@@ -114,6 +114,75 @@ def test_base_url_trailing_slash_is_trimmed(monkeypatch):
 
 
 # ===========================================================================
+# 临时凭据（Web 界面里那个输入框给的东西）
+# ===========================================================================
+
+
+def test_explicit_key_works_without_any_env_var():
+    """★ 这是这个功能的全部意义：环境里一个 Key 都没有，也能跑起来。"""
+    ep = providers.resolve(model="glm-4.5-flash", api_key="sk-pasted")
+
+    assert ep.api_key == "sk-pasted"
+    assert ep.provider == "zhipu"
+    assert ep.base_url == "https://open.bigmodel.cn/api/paas/v4"
+
+
+def test_explicit_values_beat_env_vars(monkeypatch):
+    """优先级：显式 > 环境变量（这也是 resolve 文档里承诺过的）。"""
+    monkeypatch.setenv("ZHIPU_API_KEY", "sk-from-env")
+    monkeypatch.setenv("LLM_BASE_URL", "https://env.example.com/v1")
+
+    ep = providers.resolve(
+        "glm-4.5-flash", base_url="https://pasted.example.com/v1", api_key="sk-pasted"
+    )
+    assert ep.api_key == "sk-pasted"
+    assert ep.base_url == "https://pasted.example.com/v1"
+
+
+def test_explicit_base_url_trailing_slash_is_trimmed():
+    ep = providers.resolve("glm-4.5-flash", base_url="https://x.example.com/v1/", api_key="sk-a")
+    assert ep.base_url == "https://x.example.com/v1"
+
+
+def test_blank_explicit_values_fall_back_to_env(monkeypatch):
+    """★ 界面上的输入框是空的时候不能把环境变量顶掉。
+
+    这条很容易漏：空串在 Python 里是假值，但写成 `if base_url is not None`
+    就会拿一个空端点覆盖掉环境变量 —— 表现成"明明配好了却连不上"。
+    """
+    monkeypatch.setenv("ZHIPU_API_KEY", "sk-from-env")
+
+    ep = providers.resolve("glm-4.5-flash", api_key="", base_url="   ")
+    assert ep.api_key == "sk-from-env"
+    assert ep.base_url == "https://open.bigmodel.cn/api/paas/v4"
+
+
+def test_temp_key_never_shows_up_in_safe_repr():
+    """临时凭据也要守同一条纪律：能安全打印的描述里不能有它。"""
+    ep = providers.resolve(model="glm-4.5-flash", api_key="sk-temp-secret")
+    assert "sk-temp-secret" not in ep.safe_repr()
+
+
+def test_from_provider_accepts_temp_credentials():
+    """from_provider 要能吃下临时凭据。
+
+    ★ 这里曾经有个坑：如果 base_url / api_key 只写在 `**kwargs` 里，
+      它们会既被 resolve 用、又被原样传给构造函数，直接撞成
+      "got multiple values for keyword argument"。
+    """
+    from agent.llm import LLMClient
+
+    client = LLMClient.from_provider(
+        model="glm-4.5-flash",
+        verbose=False,
+        api_key="sk-pasted",
+        base_url="https://p.example.com/v1",
+    )
+    assert client.api_key == "sk-pasted"
+    assert client.base_url == "https://p.example.com/v1"
+
+
+# ===========================================================================
 # Key 的纪律
 # ===========================================================================
 

@@ -299,6 +299,9 @@ class LLMClient:
         cls,
         model: str | None = None,
         provider: str | None = None,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
         **kwargs,
     ) -> LLMClient:
         """按供应商注册表解析出端点与 Key，再建客户端。
@@ -306,10 +309,16 @@ class LLMClient:
         上层只说"我要用哪个模型"，不必知道它属于哪家、Key 存在哪个环境变量里。
         providers 在函数里导入：依赖方向（llm → providers，反向不成立）
         这样在文件里一眼可见。
+
+        `base_url` / `api_key` 是**临时凭据**（界面上填的那种）：给了就用给的，
+        没给就按环境变量走 —— 与 `resolve()` 的优先级一致。
+        ★ 这里必须写成显式参数、不能靠 `**kwargs` 漏下去：否则
+          `api_key` 会同时被 resolve 读环境变量、又原样传给构造函数，
+          撞成 "got multiple values for keyword argument"。
         """
         from agent.providers import resolve
 
-        endpoint = resolve(model=model, provider=provider)
+        endpoint = resolve(model=model, provider=provider, base_url=base_url, api_key=api_key)
         return cls(
             api_key=endpoint.api_key,
             model=endpoint.model,

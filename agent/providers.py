@@ -12,9 +12,10 @@
 上层只说"我要用哪个模型"，不用关心它属于哪家、Key 存在哪个变量里。
 
 ★ Key 的纪律（这条不能破，破了就是事故）：
-    Key 只从环境变量读、只活在内存里，**绝不落盘、绝不进 trace、绝不打进日志**。
+    Key 只从环境变量读（或由调用方临时传进来）、只活在内存里，
+    **绝不落盘、绝不进 trace、绝不打进日志**。
     因为 trace 和报告是要提交进仓库、还要贴给别人看的。
-    本模块只有读，没有任何写入接口。
+    本模块只有读，没有任何写入接口 —— 临时凭据也不例外。
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -123,10 +124,21 @@ def guess_provider(model: str | None) -> str:
     return DEFAULT_PROVIDER
 
 
-def resolve(model: str | None = None, provider: str | None = None) -> Endpoint:
+def resolve(
+    model: str | None = None,
+    provider: str | None = None,
+    *,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> Endpoint:
     """把「模型名 / 供应商名」解析成一次调用真正需要的东西。
 
     优先级：显式参数 > 环境变量 > 注册表默认值。
+
+    `base_url` / `api_key` 两个显式参数是给**临时凭据**用的（Web 界面里那个输入框）。
+    ★ 它们和从环境变量读到的 Key 是同一种东西：**只活在内存里**。
+      本模块只读不写 —— 不落盘、不进 trace、不进断点，也不进日志。
+      （端点要打印时用 `Endpoint.safe_repr()`，那个方法不含 Key。）
     """
     env = os.environ
     name = (provider or "").strip().lower() or env.get(ENV_PROVIDER, "").strip().lower()
@@ -141,13 +153,22 @@ def resolve(model: str | None = None, provider: str | None = None) -> Endpoint:
             )
         resolved_model = target.models[0]
 
-    # 端点与 Key：允许用通用变量覆盖（接任何 OpenAI 兼容服务）
-    base_url = (env.get(ENV_BASE_URL, "") or target.base_url).rstrip("/")
-    if not base_url:
+    # 端点：显式 > 通用环境变量 > 该供应商的默认端点
+    resolved_base = (
+        (base_url or "").strip()
+        or env.get(ENV_BASE_URL, "")
+        or target.base_url
+    ).rstrip("/")
+    if not resolved_base:
         raise ProviderError(f"{target.name} 没有配置 base_url（可以设 {ENV_BASE_URL}）")
 
-    api_key = env.get(ENV_API_KEY, "") or env.get(target.api_key_env, "")
-    if not api_key:
+    # Key：显式 > 通用环境变量 > 该供应商专属变量
+    resolved_key = (
+        (api_key or "").strip()
+        or env.get(ENV_API_KEY, "")
+        or env.get(target.api_key_env, "")
+    )
+    if not resolved_key:
         if not target.key_optional:
             # 建议里必须**排除当前这家** —— 第一版写死了 "deepseek / ollama"，
             # 结果在 deepseek 上失败时提示"或者换一家：--provider deepseek"，
@@ -160,12 +181,12 @@ def resolve(model: str | None = None, provider: str | None = None) -> Endpoint:
                 f"或者换一家：{others}"
             )
         # 本地端点也会校验 Authorization 头非空，随便填一个占位符
-        api_key = "local-no-key-needed"
+        resolved_key = "local-no-key-needed"
 
     return Endpoint(
         provider=target.name,
-        base_url=base_url,
-        api_key=api_key,
+        base_url=resolved_base,
+        api_key=resolved_key,
         model=resolved_model,
         supports_tools=target.supports_tools,
     )
