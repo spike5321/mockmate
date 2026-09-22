@@ -53,12 +53,43 @@ LINE = "─" * 72
 
 
 # ---------------------------------------------------------------------------
+# 输出通道
+#
+# 整个文件只从 emit() 这一个口子往外写。默认就是打印到终端（所以命令行的行为
+# 一个字都不变），界面里把它换掉就能接管输出 —— Web 界面要"实时看面试过程"，
+# 靠的就是换这一个函数。
+#
+# ★ 为什么不干脆在界面里重定向 sys.stdout？
+#   ① Streamlit 是多线程的，重定向全局 stdout 不是线程安全的；
+#   ② 那样只能拿到一坨裸文本，拿不到"第几轮、调了哪个工具"这类结构；
+#   ③ 我们已经被 stdout 混入无关内容坑过（宿主的钩子日志混进过输出）。
+# ---------------------------------------------------------------------------
+
+#: 当前输出目标。默认直接打印。
+_sink: Callable[[str], None] = lambda text: print(text)
+
+
+def emit(text: str = "") -> None:
+    """所有输出的唯一出口。"""
+    _sink(text)
+
+
+def set_sink(sink: Callable[[str], None] | None) -> None:
+    """换掉输出目标；传 None 恢复成打印到终端。
+
+    只在进程内生效，不改变任何逻辑 —— 纯输出层的事。
+    """
+    global _sink
+    _sink = sink if sink is not None else (lambda text: print(text))
+
+
+# ---------------------------------------------------------------------------
 # 输出辅助（纯粹为了好看，跟 Agent 逻辑无关）
 # ---------------------------------------------------------------------------
 
 
 def banner(text: str) -> None:
-    print(f"\n{LINE}\n  {text}\n{LINE}")
+    emit(f"\n{LINE}\n  {text}\n{LINE}")
 
 
 def clip(text: str | None, limit: int = 220) -> str:
@@ -69,7 +100,7 @@ def clip(text: str | None, limit: int = 220) -> str:
 
 
 def log(turn: int, icon: str, text: str) -> None:
-    print(f"[{turn:02d}] {icon} {text}")
+    emit(f"[{turn:02d}] {icon} {text}")
 
 
 def score_hint(payload: dict) -> str:
@@ -184,11 +215,11 @@ def ask_what_to_do(
       脚本想替换输入源（自动验证、测试）就换不掉。
     """
     ask = ask or input
-    print()
-    print(LINE)
-    print(f"  面试卡住了 —— {_KIND_HINTS.get(kind, kind)}")
-    print(f"  {clip(error, 200)}")
-    print(LINE)
+    emit()
+    emit(LINE)
+    emit(f"  面试卡住了 —— {_KIND_HINTS.get(kind, kind)}")
+    emit(f"  {clip(error, 200)}")
+    emit(LINE)
 
     options: list[tuple[str, str]] = [("1", "retry")]
     for index, name in enumerate(alternatives, start=2):
@@ -198,22 +229,22 @@ def ask_what_to_do(
     options.append((str(base + 1), "give_up"))
     give_up_key = str(base + 1)
 
-    print("  怎么办？")
+    emit("  怎么办？")
     for key, action in options:
         if action == "retry":
-            print(f"    {key}) 等 {RETRY_WAIT_SEC} 秒再试一次")
+            emit(f"    {key}) 等 {RETRY_WAIT_SEC} 秒再试一次")
         elif action == "fix_key":
-            print(f"    {key}) 我去改 .env 里的 Key，改完回来重试")
+            emit(f"    {key}) 我去改 .env 里的 Key，改完回来重试")
         elif action == "give_up":
-            print(f"    {key}) 放弃，用已完成的记录出一份不完整的报告")
+            emit(f"    {key}) 放弃，用已完成的记录出一份不完整的报告")
         else:
-            print(f"    {key}) 换成 {action.split(':', 1)[1]} 继续")
-    print()
+            emit(f"    {key}) 换成 {action.split(':', 1)[1]} 继续")
+    emit()
 
     try:
         raw = ask(f"  选择（直接回车 = {give_up_key} 放弃）: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
-        print("\n  （读不到输入 —— 按「放弃」处理）")
+        emit("\n  （读不到输入 —— 按「放弃」处理）")
         return "give_up"
 
     for key, action in options:
@@ -343,7 +374,7 @@ def run_interview(
                 f"第 {turn} 轮起，面试官模型从 {previous_model} 换成了 {model}"
             )
         if verbose:
-            print(f"  ↻ 从断点续跑：{run_id}，已完成 {turn} 轮，接着往下问\n")
+            emit(f"  ↻ 从断点续跑：{run_id}，已完成 {turn} 轮，接着往下问\n")
 
     def _state() -> dict:
         """当前进度的完整快照。"""
@@ -385,7 +416,7 @@ def run_interview(
 
         toolbox.notes.append(note)
         if verbose:
-            print(f"  ↻ {note}")
+            emit(f"  ↻ {note}")
 
     def _clear_interrupt() -> None:
         """升级成功之后把"这是一次中断"的标记撤掉 —— 它已经不是中断了。"""
@@ -415,13 +446,13 @@ def run_interview(
 
         # ---- 第三级：问人 ----
         if not interactive:
-            print("  （--no-interactive：不询问，直接用已有记录出报告）")
+            emit("  （--no-interactive：不询问，直接用已有记录出报告）")
             return False
 
         choice = ask_what_to_do(exc.kind, str(exc), model, _alternative_models(model))
 
         if choice == "retry":
-            print(f"  等 {RETRY_WAIT_SEC} 秒再试……")
+            emit(f"  等 {RETRY_WAIT_SEC} 秒再试……")
             time.sleep(RETRY_WAIT_SEC)
             turn -= 1
             return True
@@ -436,7 +467,7 @@ def run_interview(
             return True
 
         if choice == "fix_key":
-            print("  改完 .env 后按回车继续（不用重启程序，Key 会重新读一遍）")
+            emit("  改完 .env 后按回车继续（不用重启程序，Key 会重新读一遍）")
             try:
                 input()
             except (EOFError, KeyboardInterrupt):
@@ -453,10 +484,10 @@ def run_interview(
 
     if verbose:
         banner(f"MockMate 自研调度循环 · 场景 {scenario_id} · 模型 {model}")
-        print("  规则：模型自主决定下一步做什么，循环由它来终止")
+        emit("  规则：模型自主决定下一步做什么，循环由它来终止")
         if not resume_state:
-            print(f"  断点：中途出故障可以用 --resume {run_id} 接着跑")
-        print()
+            emit(f"  断点：中途出故障可以用 --resume {run_id} 接着跑")
+        emit()
 
     # =======================================================================
     # ★★★ 主循环 ★★★
@@ -488,7 +519,7 @@ def run_interview(
             reply = llm.chat(messages, tools=TOOL_SCHEMAS)
         except LLMError as exc:
             error = str(exc)
-            print(f"\n!! 第 {turn} 轮 LLM 调用失败（{exc.kind}）：{clip(error, 200)}")
+            emit(f"\n!! 第 {turn} 轮 LLM 调用失败（{exc.kind}）：{clip(error, 200)}")
 
             # 先落盘、再升级：万一升级过程中程序被关掉，进度也不会丢
             _snapshot(f"LLM 调用失败（{exc.kind}）：{error}")
@@ -524,7 +555,7 @@ def run_interview(
             tool_silence += 1
             if tool_silence >= TOOL_SILENCE_LIMIT and not silence_warned:
                 silence_warned = True
-                print(
+                emit(
                     f"\n  ⚠️  连续 {tool_silence} 轮没有任何工具调用 —— "
                     f"这个模型很可能不支持 function calling。\n"
                     f"      真不支持的话，面试不会真正开始：它只会一直说话，\n"
@@ -566,7 +597,7 @@ def run_interview(
         # ---- ③ 分支 B：模型只是在说话 ----
         spoken = (reply.content or "").strip()
         if verbose and spoken:
-            print(f"       💬 面试官：{clip(spoken, 300)}")
+            emit(f"       💬 面试官：{clip(spoken, 300)}")
 
         if toolbox.finished:
             _snapshot()
@@ -603,7 +634,7 @@ def run_interview(
             answer = candidate.answer_for(question, spoken=spoken)
             nod_streak = 0
             if verbose:
-                print(f"       🙋 候选人：{clip(answer, 300)}")
+                emit(f"       🙋 候选人：{clip(answer, 300)}")
             # ★ 前缀 [候选人回答] 不是装饰 —— 它是给模型看的角色路标。
             #   第一版直接把答案裸着塞进去，模型分不清"这是别人说的"还是
             #   "该我接着说了"，于是出现面试官替候选人做自我介绍的荒唐场面。
@@ -622,16 +653,16 @@ def run_interview(
     elapsed = time.time() - started
 
     if turn >= max_turns and not toolbox.finished:
-        print(f"\n!! 达到最大轮数 {max_turns}，强制结束（模型没能自己收尾）")
+        emit(f"\n!! 达到最大轮数 {max_turns}，强制结束（模型没能自己收尾）")
 
     # 断点收尾：没有中断 = 跑完了，标一下，这样 --resume latest 不会挑到它。
     # 中断的情况故意不标 —— 断点得留着给用户续跑。
     if error is None:
         checkpoint.mark_completed(run_id, _state())
     else:
-        print(f"\n  断点已保留：{checkpoint.path_for(run_id)}")
-        print("  方便的时候可以接着跑 ——")
-        print(f"      python -u orchestrator.py --scenario {scenario_id} --resume {run_id}")
+        emit(f"\n  断点已保留：{checkpoint.path_for(run_id)}")
+        emit("  方便的时候可以接着跑 ——")
+        emit(f"      python -u orchestrator.py --scenario {scenario_id} --resume {run_id}")
 
     # ★ 兜底交付：循环因 API 故障中止时，用已有记录出一份「不完整但真实」的报告。
     #   run12 的经历：跑到第 17 轮撞限流，主循环 break，结果是 EXIT=1 + 报告为空，
@@ -640,8 +671,8 @@ def run_interview(
     if error is not None and toolbox.report_path is None:
         partial = toolbox.submit_partial_report(f"LLM 调用失败：{clip(error, 90)}")
         if partial:
-            print(f"\n!! 面试中断，已用已完成的 {partial['graded']} 题生成部分报告：")
-            print(f"   {partial['report_path']}")
+            emit(f"\n!! 面试中断，已用已完成的 {partial['graded']} 题生成部分报告：")
+            emit(f"   {partial['report_path']}")
 
     summary = toolbox.summary()
     judge_calls = judge.total_calls if judge else 0
@@ -678,20 +709,20 @@ def run_interview(
 
     if verbose:
         banner("面试结束 · 运行统计")
-        print(f"  轮数            : {summary['turns']}")
-        print(f"  工具调用次数    : {summary['tool_calls']}")
-        print(f"  出题数 / 评分数 : {summary['questions_asked']} / {summary['answers_scored']}")
-        print(f"  平均分          : {summary['avg_score']}")
+        emit(f"  轮数            : {summary['turns']}")
+        emit(f"  工具调用次数    : {summary['tool_calls']}")
+        emit(f"  出题数 / 评分数 : {summary['questions_asked']} / {summary['answers_scored']}")
+        emit(f"  平均分          : {summary['avg_score']}")
         llm_scored = summary.get("scored_by_llm", 0)
         rule_scored = summary.get("scored_by_rule", 0)
-        print(f"  评分来源        : LLM {llm_scored} 题 / 规则降级 {rule_scored} 题")
-        print(f"  结束原因        : {summary['finish_reason']}")
-        print(f"  报告            : {summary['report_path']}")
-        print(f"  耗时            : {summary['elapsed_sec']}s")
-        print(f"  LLM 调用 / token: {summary['llm_calls']} 次"
+        emit(f"  评分来源        : LLM {llm_scored} 题 / 规则降级 {rule_scored} 题")
+        emit(f"  结束原因        : {summary['finish_reason']}")
+        emit(f"  报告            : {summary['report_path']}")
+        emit(f"  耗时            : {summary['elapsed_sec']}s")
+        emit(f"  LLM 调用 / token: {summary['llm_calls']} 次"
               f"（其中评分 {summary.get('judge_calls', 0)} 次）, "
               f"{summary['prompt_tokens']} in + {summary['completion_tokens']} out")
-        print(f"  决策轨迹        : {trace_file}")
+        emit(f"  决策轨迹        : {trace_file}")
 
         # 运行质量提示：一题都没通过 pick_question 出，说明模型没有走工具约定的路径
         # （run13 就是这样：全程自己编题、编 id，最后批量补交 13 个评分全部被拦）。
@@ -699,10 +730,10 @@ def run_interview(
         # 不提示的话很容易被当成一次成功，是最危险的那种失败。
         # 注意只说现象，不猜原因（也可能是提前中断导致根本没到出题环节）。
         if summary["questions_asked"] == 0:
-            print("\n  ⚠️  整场面试没有通过 pick_question 出题，评分链路未生效")
+            emit("\n  ⚠️  整场面试没有通过 pick_question 出题，评分链路未生效")
 
         if not toolbox.report_path:
-            print("\n  ⚠️  模型结束了面试但没有提交报告（没调 submit_report）")
+            emit("\n  ⚠️  模型结束了面试但没有提交报告（没调 submit_report）")
 
     return summary
 
@@ -765,8 +796,8 @@ def main() -> int:
     load_dotenv(ROOT / ".env")
 
     if args.list_providers:
-        print("可用的供应商（Key 只读不打印）：")
-        print(describe_all())
+        emit("可用的供应商（Key 只读不打印）：")
+        emit(describe_all())
         return 0
 
     if args.list_runs:
@@ -776,11 +807,11 @@ def main() -> int:
             else []
         )
         if not files:
-            print(f"还没有断点文件（会放在 {checkpoint.RUNS_DIR}）。")
+            emit(f"还没有断点文件（会放在 {checkpoint.RUNS_DIR}）。")
             return 0
-        print(f"断点文件（{checkpoint.RUNS_DIR}）：")
+        emit(f"断点文件（{checkpoint.RUNS_DIR}）：")
         for path in files:
-            print(checkpoint.describe(path.name[: -len(".checkpoint.json")]))
+            emit(checkpoint.describe(path.name[: -len(".checkpoint.json")]))
         return 0
 
     # --- 从断点续跑 ---
@@ -790,19 +821,19 @@ def main() -> int:
         if target == "latest":
             target = checkpoint.latest_unfinished()
             if not target:
-                print("没有找到没跑完的断点。用 --list-runs 可以看有哪些。")
+                emit("没有找到没跑完的断点。用 --list-runs 可以看有哪些。")
                 return 2
         try:
             resume_state = checkpoint.load(target)
         except (FileNotFoundError, ValueError) as exc:
-            print(f"!! 读断点失败：{exc}")
+            emit(f"!! 读断点失败：{exc}")
             return 2
 
         saved_scenario = resume_state.get("scenario_id")
         if saved_scenario != args.scenario:
             # 场景对不上就别硬跑 —— 断点里的简历、题库、候选人脚本都是另一个场景的，
             # 混着跑出来的报告没法看；而且不报错的话用户根本不知道混了。
-            print(
+            emit(
                 f"!! 这个断点属于场景 {saved_scenario!r}，和 --scenario {args.scenario!r} 对不上。\n"
                 f"   要么改用 --scenario {saved_scenario}，要么换一个断点。"
             )
@@ -815,7 +846,7 @@ def main() -> int:
         model = resume_state["model"]
     answers_path = ROOT / "scenarios" / f"{args.scenario}.answers.json"
     if not answers_path.exists():
-        print(f"找不到回答脚本：{answers_path}")
+        emit(f"找不到回答脚本：{answers_path}")
         return 2
 
     try:
@@ -835,8 +866,8 @@ def main() -> int:
     except ProviderError as exc:
         # 配置期的问题（名字不认识 / Key 没配）要在开跑前拦下来。
         # 拖到面试中途才炸，用户已经白等一会儿了，而且那会儿报错更难懂。
-        print(f"\n!! 供应商配置有问题：{exc}")
-        print("   加 --list-providers 可以看当前有哪些可用。")
+        emit(f"\n!! 供应商配置有问题：{exc}")
+        emit("   加 --list-providers 可以看当前有哪些可用。")
         return 2
 
     return 0 if summary.get("report_path") else 1
