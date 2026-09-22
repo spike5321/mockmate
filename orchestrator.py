@@ -118,6 +118,18 @@ _KIND_HINTS = {
 #: 「等一会儿再试」等多久。限流窗口通常按分钟计，等太短等于没等。
 RETRY_WAIT_SEC = 60
 
+#: 连续几轮没有任何工具调用，就提醒一次。
+#:
+#: 正常一场面谈几乎每轮都会调工具（读简历 / 检索 / 取题 / 评分），
+#: 实测 run14 是 32 轮 20 次工具调用 —— 连续 3 轮零调用在正常运行里极少见，
+#: 所以这个阈值几乎不会误报，但足够早地把「模型不支持 function calling」揪出来。
+#:
+#: 为什么值得为它专门写段代码：**不支持工具调用的模型不会报错**。
+#: 它只是老老实实地一直"说话"，候选人照常作答，一路空转到轮次上限 ——
+#: 看起来跑完了（有轮数、有对话记录），其实什么都没产出。
+#: 等跑到最后那条"没出过题"的警告才提示，用户已经白等了十几分钟、还烧了额度。
+TOOL_SILENCE_LIMIT = 3
+
 
 def _alternative_models(current_model: str, limit: int = 3) -> list[str]:
     """同一家供应商里还能换哪些模型。
@@ -300,6 +312,8 @@ def run_interview(
     error: str | None = None
     nod_streak = 0   # 连续几轮没能给出答案（防死循环保险丝，详见分支 B 的注释）
     nudged = False   # 是否已经提醒过模型"该交报告了"
+    tool_silence = 0        # 连续几轮没有工具调用（识别"不支持 function calling 的模型"）
+    silence_warned = False  # 那个提醒只说一次
 
     # --- 断点：这场面试的身份证，以及「从哪儿接着跑」---
     run_id = checkpoint.new_run_id()
@@ -501,6 +515,23 @@ def run_interview(
             }
         )
 
+        # ---- 盯一眼"这个模型到底会不会用工具" ----
+        # 不支持 function calling 的模型**不会报错**，它只会一直"说话"。
+        # 早点把这种情况点出来，别让人白等一整场、还烧掉额度。
+        if reply.wants_tools:
+            tool_silence = 0
+        else:
+            tool_silence += 1
+            if tool_silence >= TOOL_SILENCE_LIMIT and not silence_warned:
+                silence_warned = True
+                print(
+                    f"\n  ⚠️  连续 {tool_silence} 轮没有任何工具调用 —— "
+                    f"这个模型很可能不支持 function calling。\n"
+                    f"      真不支持的话，面试不会真正开始：它只会一直说话，\n"
+                    f"      不出题、不评分、也交不出报告（本项目 8 个工具全靠这个能力）。\n"
+                    f"      建议换一个支持工具调用的模型再跑。\n"
+                )
+
         # ---- ② 分支 A：模型要求调用工具 ----
         if reply.wants_tools:
             for call in reply.tool_calls:
@@ -634,9 +665,11 @@ def run_interview(
         }
     )
 
-    # 轨迹落盘，方便事后复盘"模型当时为什么这么决策"
-    traces_dir = ROOT / "traces"
-    traces_dir.mkdir(exist_ok=True)
+    # 轨迹落盘，方便事后复盘"模型当时为什么这么决策"。
+    # 目录可以用 MOCKMATE_TRACE_DIR 覆盖 —— 和 MOCKMATE_KB_DIR 一个路子，
+    # 这样测试跑起来不会往仓库里堆文件。
+    traces_dir = Path(os.environ.get("MOCKMATE_TRACE_DIR") or (ROOT / "traces"))
+    traces_dir.mkdir(parents=True, exist_ok=True)
     trace_file = traces_dir / f"{scenario_id}_{datetime.now():%Y%m%d_%H%M%S}.json"
     trace_file.write_text(
         json.dumps({"summary": summary, "trace": trace}, ensure_ascii=False, indent=2),
