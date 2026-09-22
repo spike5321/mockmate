@@ -21,12 +21,19 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
-# 智谱的 OpenAI 兼容端点。换供应商就改这里。
-DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-DEFAULT_MODEL = "glm-4.5-flash"
+from agent.providers import DEFAULT_PROVIDER as _DEFAULT_PROVIDER_NAME
+from agent.providers import PROVIDERS
+
+# 默认端点与模型。**这两个值来自供应商注册表**，不在这里手写一份 ——
+# 否则同一个 base_url 会在两个文件里各躺一遍，迟早对不上。
+# 想换供应商不用改代码：用 LLMClient.from_provider()，或设 LLM_PROVIDER 环境变量。
+_DEFAULT = PROVIDERS[_DEFAULT_PROVIDER_NAME]
+DEFAULT_BASE_URL = _DEFAULT.base_url
+DEFAULT_MODEL = _DEFAULT.models[0]
 
 # 向量化模型。知识库检索用它把文本和问题转成同维度的向量。
 # embedding-3 输出 2048 维；换模型必须重建向量库（维度不同不能混用）。
@@ -34,6 +41,27 @@ DEFAULT_EMBEDDING_MODEL = "embedding-3"
 
 # 这些状态码是"值得重试"的：限流 + 服务端临时故障
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+# 指向本机的地址一律绕过系统代理。
+#
+# ★ 实测踩到的：本机设了 HTTP_PROXY 时，连 http://localhost:11434（本地 Ollama）
+#   的请求会被发给代理，代理连不上就回一个 **HTTP 502** ——
+#   界面上看着像"服务端故障"，让人以为是模型那边的问题，
+#   其实只是本地服务没起来。本地端点绕过代理才是对的。
+_LOCAL_HOSTS = {"localhost", "0.0.0.0", "::1"}
+
+
+def is_local_url(url: str) -> bool:
+    """这个地址是不是指向本机？"""
+    host = (urlparse(url).hostname or "").lower()
+    return host in _LOCAL_HOSTS or host.startswith("127.")
+
+
+def proxy_config_for(url: str) -> dict | None:
+    """本地地址返回「禁用代理」，其余返回 None（交给 requests 按环境变量决定）。"""
+    if is_local_url(url):
+        return {"http": None, "https": None}
+    return None
 
 # 每类错误的重试基数（秒），退避时长 = 基数 × 2^(已重试次数)。
 #
@@ -259,6 +287,29 @@ class LLMClient:
         self.total_completion_tokens = 0
         self.total_calls = 0
 
+    @classmethod
+    def from_provider(
+        cls,
+        model: str | None = None,
+        provider: str | None = None,
+        **kwargs,
+    ) -> LLMClient:
+        """按供应商注册表解析出端点与 Key，再建客户端。
+
+        上层只说"我要用哪个模型"，不必知道它属于哪家、Key 存在哪个环境变量里。
+        providers 在函数里导入：依赖方向（llm → providers，反向不成立）
+        这样在文件里一眼可见。
+        """
+        from agent.providers import resolve
+
+        endpoint = resolve(model=model, provider=provider)
+        return cls(
+            api_key=endpoint.api_key,
+            model=endpoint.model,
+            base_url=endpoint.base_url,
+            **kwargs,
+        )
+
     # -- 内部 ---------------------------------------------------------------
 
     def _post(self, path: str, payload: dict):
@@ -270,6 +321,8 @@ class LLMClient:
             },
             json=payload,
             timeout=self.timeout,
+            # 本地端点（Ollama 之类）不走代理，原因见 _LOCAL_HOSTS 上面那段
+            proxies=proxy_config_for(self.base_url),
         )
 
     def _call(self, path: str, payload: dict) -> dict:

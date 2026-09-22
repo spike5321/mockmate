@@ -254,3 +254,62 @@ def test_error_body_without_hints_is_other(monkeypatch):
     with pytest.raises(LLMError) as ei:
         client._parse({"error": {"message": "something odd happened"}})
     assert ei.value.kind == "other"
+
+
+# ===========================================================================
+# 本地端点不走代理
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("http://localhost:11434/v1", True),
+        ("http://127.0.0.1:8000/v1", True),
+        ("http://127.0.0.1/v1", True),
+        ("http://0.0.0.0:11434/v1", True),
+        ("http://[::1]:11434/v1", True),
+        ("https://open.bigmodel.cn/api/paas/v4", False),
+        ("https://api.deepseek.com/v1", False),
+        # 域名里带 localhost 但其实是外网地址 —— 不能误判
+        ("https://localhost.evil.example.com/v1", False),
+    ],
+)
+def test_is_local_url(url, expected):
+    assert llm_mod.is_local_url(url) is expected
+
+
+def test_local_url_disables_proxies():
+    """★ 实测踩到的：本机设了 HTTP_PROXY 时，连本地 Ollama 的请求会被发给代理，
+    代理连不上就回 HTTP 502 —— 看着像服务端故障，其实本地服务压根没起来。"""
+    assert llm_mod.proxy_config_for("http://localhost:11434/v1") == {
+        "http": None,
+        "https": None,
+    }
+    assert llm_mod.proxy_config_for("https://api.deepseek.com/v1") is None
+
+
+def test_proxy_choice_really_reaches_requests(monkeypatch):
+    """光有判断函数不算数 —— 得确认它真的传进了 requests.post。"""
+    captured: dict = {}
+
+    def fake_post(url, **kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return _FakeResponse(
+            200, "", {"choices": [{"message": {"content": "hi"}}], "usage": {}}
+        )
+
+    monkeypatch.setattr(llm_mod.requests, "post", fake_post)
+
+    local = LLMClient(
+        api_key="k", model="m", base_url="http://localhost:11434/v1", verbose=False
+    )
+    local.chat([{"role": "user", "content": "x"}])
+    assert captured["proxies"] == {"http": None, "https": None}
+
+    remote = LLMClient(
+        api_key="k", model="m", base_url="https://api.deepseek.com/v1", verbose=False
+    )
+    remote.chat([{"role": "user", "content": "x"}])
+    assert captured["proxies"] is None

@@ -43,6 +43,7 @@ from dotenv import load_dotenv  # noqa: E402
 from agent.candidate import CandidateSim  # noqa: E402
 from agent.evaluator import AnswerEvaluator  # noqa: E402
 from agent.llm import DEFAULT_MODEL, LLMClient, LLMError  # noqa: E402
+from agent.providers import ProviderError, describe_all  # noqa: E402
 from agent.prompts import build_system_prompt  # noqa: E402
 from agent.tools import TOOL_SCHEMAS, ToolBox  # noqa: E402
 
@@ -96,9 +97,11 @@ def run_interview(
     verbose: bool = True,
     use_llm_score: bool = True,
     score_model: str | None = None,
+    provider: str | None = None,
 ) -> dict:
-    api_key = os.environ.get("ZHIPU_API_KEY", "")
-    llm = LLMClient(api_key=api_key, model=model, verbose=verbose)
+    # 端点和 Key 都交给供应商注册表解析 —— 这一层不该知道
+    # "Key 存在 ZHIPU_API_KEY 里"这种细节，那是 providers.py 的知识。
+    llm = LLMClient.from_provider(model=model, provider=provider, verbose=verbose)
 
     # 评分器是一个**独立的客户端**，不是复用面试官那个。两个理由：
     #
@@ -111,8 +114,9 @@ def run_interview(
     #    也让「出题的」和「判卷的」不再是同一个模型，评分视角更独立。
     judge: LLMClient | None = None
     if use_llm_score:
-        judge = LLMClient(
-            api_key=api_key,
+        # 评分客户端也走注册表，但**不继承主 provider** ——
+        # SCORE_MODEL 可能属于另一家，让它按模型名自己判断更准。
+        judge = LLMClient.from_provider(
             model=score_model or model,
             verbose=verbose,
             max_retries=2,   # 10s + 20s 之后就放弃，快速降级
@@ -357,14 +361,27 @@ def run_interview(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="MockMate 自研 Agent 调度循环")
+    parser = argparse.ArgumentParser(
+        description="MockMate 自研 Agent 调度循环",
+        epilog="不确定有哪些供应商可用？加 --list-providers 看一眼。",
+    )
     parser.add_argument("--scenario", default="backend_intern", help="场景 ID")
     parser.add_argument("--max-turns", type=int, default=30, help="最大轮数（保险丝）")
+    parser.add_argument(
+        "--provider",
+        default=None,
+        help="供应商：zhipu / deepseek / ollama。默认按模型名自动判断",
+    )
     parser.add_argument("--model", default=None, help="模型名，默认取 .env 里的 CHAT_MODEL")
     parser.add_argument(
         "--score-model",
         default=None,
         help="评分模型，默认与面试官相同。可用来错开限流，或换更强的模型判分",
+    )
+    parser.add_argument(
+        "--list-providers",
+        action="store_true",
+        help="看看有哪些供应商、Key 配没配（不发起面试）",
     )
     parser.add_argument("--quiet", action="store_true", help="只输出统计，不打过程")
     parser.add_argument(
@@ -376,21 +393,35 @@ def main() -> int:
 
     load_dotenv(ROOT / ".env")
 
+    if args.list_providers:
+        print("可用的供应商（Key 只读不打印）：")
+        print(describe_all())
+        return 0
+
     model = args.model or os.environ.get("CHAT_MODEL") or DEFAULT_MODEL
     answers_path = ROOT / "scenarios" / f"{args.scenario}.answers.json"
     if not answers_path.exists():
         print(f"找不到回答脚本：{answers_path}")
         return 2
 
-    summary = run_interview(
-        scenario_id=args.scenario,
-        answers_path=answers_path,
-        max_turns=args.max_turns,
-        model=model,
-        verbose=not args.quiet,
-        use_llm_score=not args.no_llm_score,
-        score_model=args.score_model or os.environ.get("SCORE_MODEL") or None,
-    )
+    try:
+        summary = run_interview(
+            scenario_id=args.scenario,
+            answers_path=answers_path,
+            max_turns=args.max_turns,
+            model=model,
+            verbose=not args.quiet,
+            use_llm_score=not args.no_llm_score,
+            score_model=args.score_model or os.environ.get("SCORE_MODEL") or None,
+            provider=args.provider,
+        )
+    except ProviderError as exc:
+        # 配置期的问题（名字不认识 / Key 没配）要在开跑前拦下来。
+        # 拖到面试中途才炸，用户已经白等一会儿了，而且那会儿报错更难懂。
+        print(f"\n!! 供应商配置有问题：{exc}")
+        print("   加 --list-providers 可以看当前有哪些可用。")
+        return 2
+
     return 0 if summary.get("report_path") else 1
 
 
