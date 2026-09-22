@@ -190,6 +190,28 @@ class CandidateSim:
             or list(self.FALLBACK_GENERIC)
         self.generic_idx = 0
 
+    # -- 断点续跑（阶段 5）--------------------------------------------------
+
+    def dump_state(self) -> dict:
+        """导出「取到哪儿了」的进度。
+
+        只存**进度**：答案池、追问池、兜底池本身都能从 answers JSON 重建，
+        真正会变的是"用过的题""每个话题的追问取到第几条""兜底池轮到第几条"。
+        """
+        return {
+            "used_keys": sorted(self.used_keys),
+            "fu_count": self.fu_count,
+            "generic_idx": self.generic_idx,
+        }
+
+    def load_state(self, state: dict) -> None:
+        if "used_keys" in state:
+            self.used_keys = set(state["used_keys"])
+        if "fu_count" in state:
+            self.fu_count = {str(k): int(v) for k, v in state["fu_count"].items()}
+        if "generic_idx" in state:
+            self.generic_idx = int(state["generic_idx"])
+
     # -- 内部 ---------------------------------------------------------------
 
     @staticmethod

@@ -40,6 +40,7 @@ if str(ROOT) not in sys.path:
 
 from dotenv import load_dotenv  # noqa: E402
 
+from agent import checkpoint  # noqa: E402
 from agent.candidate import CandidateSim  # noqa: E402
 from agent.evaluator import AnswerEvaluator  # noqa: E402
 from agent.llm import DEFAULT_MODEL, LLMClient, LLMError  # noqa: E402
@@ -89,6 +90,32 @@ def score_hint(payload: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _restore_from_checkpoint(
+    state: dict,
+    toolbox: ToolBox,
+    candidate: CandidateSim,
+    messages: list[dict],
+    trace: list[dict],
+) -> None:
+    """把断点里的状态灌回各个对象。
+
+    ★ messages 是**原样**灌回去的：每条的 tool_calls 和 tool_call_id 都不能动。
+      模型看到的是一串"我说要调 X → 工具返回 Y"的记录，恢复时要是把 id
+      弄丢或者重新编一个，下一轮请求会因为"tool 消息对不上"被接口直接拒绝。
+      所以这里只做搬运，不裁剪、不重排、不补字段。
+    """
+    toolbox.load_state(state.get("toolbox") or {})
+    candidate.load_state(state.get("candidate") or {})
+
+    saved_messages = state.get("messages")
+    if saved_messages:
+        messages.clear()
+        messages.extend(saved_messages)
+
+    trace.clear()
+    trace.extend(state.get("trace") or [])
+
+
 def run_interview(
     scenario_id: str,
     answers_path: Path,
@@ -98,6 +125,7 @@ def run_interview(
     use_llm_score: bool = True,
     score_model: str | None = None,
     provider: str | None = None,
+    resume_state: dict | None = None,
 ) -> dict:
     # 端点和 Key 都交给供应商注册表解析 —— 这一层不该知道
     # "Key 存在 ZHIPU_API_KEY 里"这种细节，那是 providers.py 的知识。
@@ -147,9 +175,69 @@ def run_interview(
     nod_streak = 0   # 连续几轮没能给出答案（防死循环保险丝，详见分支 B 的注释）
     nudged = False   # 是否已经提醒过模型"该交报告了"
 
+    # --- 断点：这场面试的身份证，以及「从哪儿接着跑」---
+    run_id = checkpoint.new_run_id()
+    elapsed_before = 0.0                      # 中断前已经花掉的时间，统计时要加上
+    interrupted_record: dict | None = None    # 本次中断的原因，会写进断点
+
+    if resume_state:
+        run_id = resume_state.get("run_id") or run_id
+        elapsed_before = float(resume_state.get("elapsed") or 0.0)
+        _restore_from_checkpoint(resume_state, toolbox, candidate, messages, trace)
+        turn = int(resume_state.get("turn") or 0)
+
+        previous = resume_state.get("interrupted") or {}
+        if previous:
+            # ★ 这件事必须写进报告。一场跑得磕磕绊绊的面试，如果报告里不标出来，
+            #   读的人会以为它是一口气跑完的 —— 那这份报告的可信度就说不清了。
+            toolbox.notes.append(
+                f"第 {previous.get('turn')} 轮中断（{previous.get('reason')}），"
+                f"之后从断点续跑，第 {turn} 轮起继续"
+            )
+
+        previous_model = resume_state.get("model")
+        if previous_model and previous_model != model:
+            # 换模型本身没问题，**悄悄换了**才有问题：不同模型遵守 function calling
+            # 的程度差很远（run13 的教训），不标出来这份报告就没人敢信。
+            toolbox.notes.append(
+                f"第 {turn} 轮起，面试官模型从 {previous_model} 换成了 {model}"
+            )
+        if verbose:
+            print(f"  ↻ 从断点续跑：{run_id}，已完成 {turn} 轮，接着往下问\n")
+
+    def _state() -> dict:
+        """当前进度的完整快照。"""
+        return {
+            "scenario_id": scenario_id,
+            "answers_file": answers_path.name,
+            "turn": turn,
+            "messages": messages,
+            "trace": trace,
+            "toolbox": toolbox.dump_state(),
+            "candidate": candidate.dump_state(),
+            "model": model,
+            "provider": provider,
+            "elapsed": round(elapsed_before + (time.time() - started), 1),
+            "interrupted": interrupted_record,
+        }
+
+    def _snapshot(reason: str | None = None) -> None:
+        """把进度落盘。传了 reason 就表示"这是一次中断"。
+
+        ★ 只在正常路径上存是不够的 —— 断点文件最该被写出来的时刻，
+          恰恰是出故障的那一刻。所以循环里每个出口都得调一次。
+        """
+        nonlocal interrupted_record
+        if reason:
+            interrupted_record = {"turn": turn, "reason": clip(reason, 160)}
+        checkpoint.save(run_id, _state())
+
     if verbose:
         banner(f"MockMate 自研调度循环 · 场景 {scenario_id} · 模型 {model}")
-        print("  规则：模型自主决定下一步做什么，循环由它来终止\n")
+        print("  规则：模型自主决定下一步做什么，循环由它来终止")
+        if not resume_state:
+            print(f"  断点：中途出故障可以用 --resume {run_id} 接着跑")
+        print()
 
     # =======================================================================
     # ★★★ 主循环 ★★★
@@ -182,6 +270,9 @@ def run_interview(
         except LLMError as exc:
             error = str(exc)
             print(f"\n!! LLM 调用失败，循环中止：{error}")
+            # 中断时也要留断点 —— 这正是最该把进度写下来的时刻。
+            # 记上 kind，用户 --resume 之前能一眼看出上次是栽在哪一类问题上。
+            _snapshot(f"LLM 调用失败（{exc.kind}）：{error}")
             break
 
         # 思维链只用于本地展示，不能回传给 API
@@ -227,6 +318,7 @@ def run_interview(
                     }
                 )
             # 调完工具直接进入下一轮，让模型看着结果继续决策
+            _snapshot()
             continue
 
         # ---- ③ 分支 B：模型只是在说话 ----
@@ -235,6 +327,7 @@ def run_interview(
             print(f"       💬 面试官：{clip(spoken, 300)}")
 
         if toolbox.finished:
+            _snapshot()
             break
 
         # ────────────────────────────────────────────────────────────────
@@ -289,6 +382,15 @@ def run_interview(
     if turn >= max_turns and not toolbox.finished:
         print(f"\n!! 达到最大轮数 {max_turns}，强制结束（模型没能自己收尾）")
 
+    # 断点收尾：没有中断 = 跑完了，标一下，这样 --resume latest 不会挑到它。
+    # 中断的情况故意不标 —— 断点得留着给用户续跑。
+    if error is None:
+        checkpoint.mark_completed(run_id, _state())
+    else:
+        print(f"\n  断点已保留：{checkpoint.path_for(run_id)}")
+        print("  方便的时候可以接着跑 ——")
+        print(f"      python -u orchestrator.py --scenario {scenario_id} --resume {run_id}")
+
     # ★ 兜底交付：循环因 API 故障中止时，用已有记录出一份「不完整但真实」的报告。
     #   run12 的经历：跑到第 17 轮撞限流，主循环 break，结果是 EXIT=1 + 报告为空，
     #   前面 7 分钟、3 道题的真实评分全丢了 —— 而它们恰恰是这场运行最有价值的产物。
@@ -304,7 +406,9 @@ def run_interview(
     summary.update(
         {
             "turns": turn,
-            "elapsed_sec": round(elapsed, 1),
+            "run_id": run_id,
+            # 续跑时把中断前花掉的时间也算进来，否则"耗时"会只显示最后一段
+            "elapsed_sec": round(elapsed_before + elapsed, 1),
             "llm_calls": llm.total_calls + judge_calls,
             "judge_calls": judge_calls,          # 其中评分调用占了几次
             "prompt_tokens": llm.total_prompt_tokens
@@ -383,6 +487,15 @@ def main() -> int:
         action="store_true",
         help="看看有哪些供应商、Key 配没配（不发起面试）",
     )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="latest",
+        default=None,
+        metavar="RUN_ID",
+        help="从断点续跑；不给值就接最近一个没跑完的",
+    )
+    parser.add_argument("--list-runs", action="store_true", help="列出本地的断点文件")
     parser.add_argument("--quiet", action="store_true", help="只输出统计，不打过程")
     parser.add_argument(
         "--no-llm-score",
@@ -398,7 +511,50 @@ def main() -> int:
         print(describe_all())
         return 0
 
+    if args.list_runs:
+        files = (
+            sorted(checkpoint.RUNS_DIR.glob("*.checkpoint.json"))
+            if checkpoint.RUNS_DIR.exists()
+            else []
+        )
+        if not files:
+            print(f"还没有断点文件（会放在 {checkpoint.RUNS_DIR}）。")
+            return 0
+        print(f"断点文件（{checkpoint.RUNS_DIR}）：")
+        for path in files:
+            print(checkpoint.describe(path.name[: -len(".checkpoint.json")]))
+        return 0
+
+    # --- 从断点续跑 ---
+    resume_state: dict | None = None
+    if args.resume:
+        target = args.resume
+        if target == "latest":
+            target = checkpoint.latest_unfinished()
+            if not target:
+                print("没有找到没跑完的断点。用 --list-runs 可以看有哪些。")
+                return 2
+        try:
+            resume_state = checkpoint.load(target)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"!! 读断点失败：{exc}")
+            return 2
+
+        saved_scenario = resume_state.get("scenario_id")
+        if saved_scenario != args.scenario:
+            # 场景对不上就别硬跑 —— 断点里的简历、题库、候选人脚本都是另一个场景的，
+            # 混着跑出来的报告没法看；而且不报错的话用户根本不知道混了。
+            print(
+                f"!! 这个断点属于场景 {saved_scenario!r}，和 --scenario {args.scenario!r} 对不上。\n"
+                f"   要么改用 --scenario {saved_scenario}，要么换一个断点。"
+            )
+            return 2
+
     model = args.model or os.environ.get("CHAT_MODEL") or DEFAULT_MODEL
+    if resume_state and args.model is None and resume_state.get("model"):
+        # 没显式指定就沿用上次那个模型。换模型本身没问题，
+        # 但"悄悄换了"会让这份报告说不清 —— 所以要么不改，要么改了就写进报告。
+        model = resume_state["model"]
     answers_path = ROOT / "scenarios" / f"{args.scenario}.answers.json"
     if not answers_path.exists():
         print(f"找不到回答脚本：{answers_path}")
@@ -414,6 +570,7 @@ def main() -> int:
             use_llm_score=not args.no_llm_score,
             score_model=args.score_model or os.environ.get("SCORE_MODEL") or None,
             provider=args.provider,
+            resume_state=resume_state,
         )
     except ProviderError as exc:
         # 配置期的问题（名字不认识 / Key 没配）要在开跑前拦下来。

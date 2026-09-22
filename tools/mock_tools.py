@@ -406,6 +406,16 @@ def _render_markdown_report(data: Dict[str, Any]) -> str:
                      "不代表完整面试表现。原因见文末「结论」。")
         lines.append("")
 
+    # 本场备注：断点续跑、中途换模型这类"确实发生过、但模型自己不知道"的事。
+    # 为什么非要写进报告：一场断过又续、或者中途换了模型的面试，
+    # 如果不标出来，读的人会以为它是一口气跑完的 —— 那这份报告的可信度就说不清了。
+    notes = data.get("notes") or []
+    if notes:
+        lines.append("> **本场备注**")
+        for note in notes:
+            lines.append(f"> - {note}")
+        lines.append("")
+
     lines.append(f"**总体评分**: **{data.get('overall_score', 0)}** / 100")
     if data.get("question_avg") is not None:
         # ★ 两个数字并排显示，作用不一样：

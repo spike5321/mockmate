@@ -285,8 +285,58 @@ class ToolBox:
         self.report_path: str | None = None
         self.report_md_path: str | None = None
 
+        # --- 异常记录（会写进报告）---
+        # 断点续跑、中途换模型这类"这场面试确实发生过、但模型自己不知道"的事记在这里。
+        # 为什么必须记：一份跑得磕磕绊绊的面试，如果报告里不写，
+        # 读的人会以为它是一口气跑完的 —— 那这份报告的可信度就说不清了。
+        self.notes: list[str] = []
+
         # --- 统计 ---
         self.call_count = 0
+
+    # -- 断点续跑（阶段 5）--------------------------------------------------
+
+    def dump_state(self) -> dict:
+        """把会话状态导出成可 JSON 化的 dict。
+
+        ★ 只导**状态**，不导 evaluator —— 那是个攥着网络连接的活对象，
+          而且它的熔断器和缓存属于"这一轮运行的保护"，恢复时重置反而更合理。
+        """
+        return {
+            "questions": self.questions,
+            "records": self.records,
+            "last_question": self.last_question,
+            "custom_count": self.custom_count,
+            "pending_question": self.pending_question,
+            "finished": self.finished,
+            "finish_reason": self.finish_reason,
+            "report_path": self.report_path,
+            "report_md_path": self.report_md_path,
+            "notes": self.notes,
+            "call_count": self.call_count,
+        }
+
+    def load_state(self, state: dict) -> None:
+        """从 dump_state() 的产物恢复。
+
+        逐字段取、缺了就跳过：断点文件可能是更早的版本写的，
+        少几个字段不该让整场面试恢复不了。
+        """
+        for key in (
+            "questions",
+            "records",
+            "last_question",
+            "custom_count",
+            "pending_question",
+            "finished",
+            "finish_reason",
+            "report_path",
+            "report_md_path",
+            "notes",
+            "call_count",
+        ):
+            if key in state:
+                setattr(self, key, state[key])
 
     # -- 统一入口 -----------------------------------------------------------
 
@@ -541,6 +591,9 @@ class ToolBox:
             "interview_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "overall_score": overall_score,
             "question_avg": question_avg,
+            # 本场备注（断点续跑、中途换模型……）会渲染进报告 ——
+            # 不标出来的话，一场跑得磕磕绊绊的面试看起来和一口气跑完的没区别。
+            "notes": list(self.notes),
             "track_avg": track_avg,
             "radar": radar,
             "highlights": highlights,
