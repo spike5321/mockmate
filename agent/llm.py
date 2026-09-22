@@ -271,8 +271,15 @@ class LLMClient:
             # 用 LLMError 而不是 ValueError：这本质上就是"认证失败"。
             # 对上层来说，「没配 Key」和「Key 过期了」是同一件事 —— 都得让用户去改配置，
             # 所以它们该是同一个 kind，而不是两种异常类型。
+            #
+            # ★ 文案里不写死某一家：这个类现在能接任何 OpenAI 兼容端点，
+            #   对一个只有 DeepSeek Key 的人说"请填入 ZHIPU_API_KEY"是纯粹的误导。
+            #   （正常路径走 from_provider()，那边会给出带供应商名的具体提示；
+            #    能走到这里的是直接构造的场景，所以说通用一点。）
             raise LLMError(
-                "缺少 API Key。请把 .env.example 复制成 .env 并填入 ZHIPU_API_KEY",
+                "缺少 API Key —— 请在 .env 里配好对应供应商的 Key"
+                "（ZHIPU_API_KEY / DEEPSEEK_API_KEY / OLLAMA_API_KEY……），"
+                "或者用 LLM_API_KEY 指定。",
                 kind="auth",
             )
         self.api_key = api_key
