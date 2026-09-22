@@ -18,5 +18,10 @@ pypdf>=4.0.0
 # 跑在 onnxruntime 上，不依赖 torch。
 fastembed>=0.4.0
 
+# --- Web 界面（可选）---
+# 只用命令行跑面试的话不需要它。装了之后 `streamlit run app.py` 就有界面了。
+# 界面能实时看面试过程、填临时 Key（只在内存里）、失败了还能从断点接着跑。
+streamlit>=1.32
+
 # --- 测试 ---
 pytest>=8.0

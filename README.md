@@ -5,7 +5,7 @@
 > 这是一个**自研的 LLM Agent 调度循环**：模型自己决定下一步做什么——读简历、检索岗位情报、出题、追问、打分、交报告、结束，
 > 循环什么时候停也由它判断。**决策循环是这个仓库自己写的代码，不依赖任何 Agent 框架。**
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-261%20passed-brightgreen)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-280%20passed-brightgreen)
 
 ### ▶ 先看这个：一次真实运行的完整回放
 
@@ -86,6 +86,7 @@ flowchart TD
 | 文件 | 职责 | 一句话 |
 |---|---|---|
 | `orchestrator.py` | **主循环** | 组装请求 → 模型决策 → 执行工具 / 候选人作答 → 写回 → 循环 |
+| `app.py` | **Web 界面** | Streamlit 页面：选场景/模型、填临时 Key、实时看面试过程、失败可续跑 |
 | `agent/llm.py` | LLM 客户端 | requests 直打 OpenAI 兼容端点，含统一指数退避重试与错误分类；`chat()` + `embed()` |
 | `agent/providers.py` | 供应商注册表 | 按模型名认出该去哪个端点、Key 读哪个环境变量（换厂商不用改代码） |
 | `agent/checkpoint.py` | 断点续跑 | 每一轮落盘；`--resume` 接着跑，跑挂了不用从头开始 |
@@ -247,10 +248,17 @@ python -m kb.build
 python -u orchestrator.py --scenario backend_intern
 ```
 
+或者用界面跑（可选，需要 `streamlit`）：
+
+```bash
+streamlit run app.py        # 浏览器打开 http://localhost:8501
+```
+
 > **第 3 步不填 Key 也能跑。** 没配 `ZHIPU_API_KEY` 时向量化会自动改用本地模型
 > （`BAAI/bge-small-zh-v1.5`，512 维，首次运行下载约 91MB，之后完全离线）。
 > 想显式指定：`python -m kb.build --provider local`。
 > 跑面试（第 4 步）仍然需要 Key —— 面试官和评分官是远程模型。
+> **界面里可以现场填一个 Key**，见下面「用界面跑」。
 
 **三个容易踩的点**：
 
@@ -259,6 +267,31 @@ python -u orchestrator.py --scenario backend_intern
 - **换 embedding 模型（含 `local` ↔ `zhipu` 之间切换）之后必须 `--rebuild`**。
   不重建的话，检索**不会报错**，只会返回一堆无意义的相似度 ——
   两种模型的向量空间不可比。所以这里做了个显式检查：库和当前配置不是一套时会直接报错并告诉你重建命令。
+
+### 用界面跑（`app.py`）
+
+侧栏选场景和模型，主区实时滚动面试过程，跑完直接看报告。
+
+**为什么它能"实时"**：主循环的所有输出都走 `orchestrator.emit()`，
+界面把输出目标换成一个队列、从队列里取着往页面上刷。
+**不需要去重定向 `sys.stdout`** —— 那样在 Streamlit 的多线程里不安全，
+而且只能拿到一坨裸文本，拿不到"第几轮、调了哪个工具"。
+
+**可以在界面上临时填一个 Key**（侧栏「用自己的凭据」）：填了就优先用它、覆盖环境变量。
+★ **它只在内存里** —— 不写 `.env`、不进断点、不进 trace。
+输入框是密码类型，因为演示的时候会共享屏幕。
+有一条测试专门跑完整场之后翻遍落盘的 JSON，确认里面没有 Key。
+
+**两条和命令行不一样的地方**（是设计取舍，不是没做）：
+
+- **网页里不会停下来问你**。终端那套「限流了，等 60 秒 / 换模型 / 改 Key / 放弃」的菜单需要键盘，
+  网页里没有。所以界面一律用 `interactive=False`：出故障直接出一份「不完整但真实」的报告，
+  想接着跑就用第二个标签页 **「接着跑没跑完的」** —— 这正是断点（阶段 5）在这里的用处。
+- **临时填的 Key 不影响向量化**。向量化仍按环境变量走：没配就用本地模型（免 Key 免网络）。
+  填一个 Key 就要求它连向量化也换掉，反而把简单的事搞复杂了。
+
+**这一轮的范围限制**：同一时刻只支持一个人跑（`set_sink` 是模块级的，两个人同时点会互相抢输出）。
+自己用的演示工具，先不引入会话隔离 —— 这条写在 `app.py` 文件头的注释里。
 
 ### 想先跑个不花钱的自检
 
@@ -272,7 +305,7 @@ python e2e_test.py     # 离线跑一遍工具链路，不调模型、不消耗�
 ### 跑测试
 
 ```bash
-python -m pytest tests -v     # 261 项，离线，不需要 API Key，实测 1.75 秒
+python -m pytest tests -v     # 280 项，离线，不需要 API Key，实测约 3 秒
 ```
 
 单测只覆盖**确定性**的部分——也就是"能被机器判定对错"的那些：
@@ -288,15 +321,20 @@ python -m pytest tests -v     # 261 项，离线，不需要 API Key，实测 1.
 | `tests/test_llm.py` | 错误分类（限流 / 网络 / 认证 / 参数 / 服务端，含平台错误码与中文关键词）、不可重试的状态立刻失败、重试耗尽后保留最后一次原因、**本地端点不走系统代理** |
 | `tests/test_checkpoint.py` | 断点存取往返一致、临时文件不残留、格式版本不匹配明确拒绝、`latest_unfinished` 跳过已完成与损坏的文件、ToolBox 与候选人状态能还原 |
 | `tests/test_escalation.py` | 什么情况自动换备选模型（**认证失败不换**）、菜单选项解析（空输入 / 未知输入 / EOF / Ctrl-C 都算放弃）、备选模型只从同一供应商里挑 |
-| `tests/test_orchestrator.py` | 主循环行为：连续 3 轮无工具调用要提醒、正常面试不能误报、提醒只说一次 |
+| `tests/test_orchestrator.py` | 主循环行为：连续 3 轮无工具调用要提醒、正常面试不能误报、提醒只说一次；**临时 Key 不落盘**（跑完整场后翻遍断点和轨迹） |
+| `tests/test_emit.py` | 输出通道：默认打印、换掉之后终端干净、能恢复；**主循环里不允许再有绕过通道的裸 print()** |
+| `tests/test_app.py` | 界面冒烟（用 Streamlit 自带的 `AppTest` 真跑一遍脚本）：页面无异常、控件齐、**临时 Key 的输入框必须是密码框** |
 
-四条刻意写进测试的**设计约束**（以后有人"顺手"改掉会立刻红）：
+**六条刻意写进测试的设计约束**（以后有人"顺手"改掉会立刻红）：
 
 - 评分请求里**只有「系统提示 + 这一道题」**，不带整场对话历史——`test_scoring_prompt_has_no_conversation_history`
 - 降级打分必须**标出来**，不能假装没降级——`test_fallback_marks_reason_that_it_is_degraded`
 - 题库里每个评分维度在提示词里都**必须有中文释义**——`test_every_bank_rubric_dimension_has_a_hint`
 - 两路各自的第一名在等权 RRF 下**必然同分**——`test_rrf_keeps_a_doc_found_by_only_one_route`
   （这条钉的是**短板**不是设计，它正是默认融合不用 RRF 的原因）
+- 临时 Key **不许落盘**——`test_temp_key_never_reaches_disk`（断点和轨迹都会被翻一遍）
+- 主循环的输出**只能走 `emit()`**——`test_no_print_bypasses_the_channel`
+  （CLI 下完全看不出问题，只有界面里会少几行，是最难发现的一类 bug）
 
 > 单测不碰真实 LLM 调用：评分器用一个假客户端顶替，报告落盘写到临时目录
 > （否则每跑一次测试就把仓库里那份真实报告覆盖掉）。
@@ -449,6 +487,7 @@ python orchestrator.py --list-providers     # 有哪些供应商、Key 配没配
 ```
 mockmate/
 ├── orchestrator.py              # ★ 主循环（这个项目的核心）
+├── app.py                       # Web 界面（Streamlit，可选）
 ├── agent/                       # Agent 运行时
 │   ├── llm.py                   #   LLM 客户端（chat + embed + 重试 + 错误分类）
 │   ├── providers.py             #   供应商注册表（按模型名认端点、认 Key 变量名）
@@ -501,8 +540,11 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
 诚实地列出来，比藏着好：
 
 - **候选人不是 LLM**，是脚本模拟的。这是刻意的（保证可复现、可离线、不烧人工），但意味着"对话的另一半"不是 Agent。
-- **没有实时 Web 界面**，只有命令行。面试过程是流式打印在终端里的。
-  运行回放页（`docs/replay/`）是**事后播放一份静态轨迹**，不是实时界面 —— 真正的 Web 界面在路线图阶段 6。
+- **有 Web 界面了，但很朴素**：`streamlit run app.py` 能选场景/模型、填临时 Key、
+  实时看面试过程、跑完看报告、失败了从断点续跑。**没有**账号、多场并发、运行中插话。
+  同一时刻只支持一个人跑。界面**没有提交截图** ——
+  它是 websocket 应用，Edge 无头模式的 `--virtual-time-budget` 在握手完成前就烧完了虚拟时钟，
+  截出来不是骨架屏就是只有侧栏（实测三次都不同）。想看图就自己 `streamlit run app.py` 跑一下。
 - **免费模型在晚高峰会被平台级限流**。调试时不要背靠背连续跑整轮面试，中间留几十秒。
 - **知识库很小**：4 篇语料、33 个片段。检索是**向量 + BM25 混合**（默认融合算法是归一化加权求和，
   另有等权 RRF 可选）。向量化支持智谱 `embedding-3`（2048 维）和本地 `bge-small-zh-v1.5`（512 维）两种，
@@ -527,7 +569,7 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
 - [x] **阶段 4** 门面
   - [x] README 重写 + mermaid 架构图 + 实测数据（取自 `traces/`，可审计）
   - [x] `docs/architecture.md` 重写为可上手版本
-  - [x] pytest 单测（离线、不花额度）—— 现在 261 项
+  - [x] pytest 单测（离线、不花额度）—— 现在 280 项
   - [x] **运行回放页**（`docs/replay/`，单文件静态 HTML，由轨迹生成）+ GitHub Pages
   - [x] 旧目录归档到 `legacy/`、`.mailmap` 统一贡献者身份
   - [x] **本地 embedding 兜底**：不填 Key 也能建库、能检索（免 Key 免网络）
@@ -538,9 +580,11 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
   - [x] **断点续跑**：跑挂了 `--resume` 接着跑，不用从头开始
   - [x] 中断问人 / 自动降级，以及出故障时兜底出一份「不完整但真实」的报告
   - [x] **向量 + BM25 混合检索**（含实测对照，见第 3 节）
-- [ ] **阶段 6** Web 界面（Streamlit）：侧栏选模型、填 Key、实时看面试过程
-  - 顺带做「用户临时填自己的模型凭据」—— 现在的 `kb/embed.py` / 供应商注册表已经就位，
-    只差界面和一条纪律：**Key 只活在内存里，不写 `.env`、不进 checkpoint、不进 trace**
+- [x] **阶段 6** Web 界面（Streamlit）
+  - [x] 主循环输出收成一个可替换的通道（55 处 `print` → `emit()`）
+  - [x] **临时凭据**：界面上填的 Key 只在内存里，不写 `.env`、不进断点、不进 trace
+  - [x] `app.py`：侧栏选场景/模型/凭据，主区实时滚动输出 + 报告 + 断点续跑
+  - [ ] （没做，也不打算做）账号、多场并发、运行中插话
 
 ---
 

@@ -20,8 +20,9 @@
 
 ```mermaid
 flowchart TB
-    subgraph L1["编排层 · orchestrator.py"]
-        MAIN["主循环<br/>决策 · 分发 · 状态推进 · 预算提醒 · 收尾"]
+    subgraph L1["编排层"]
+        MAIN["orchestrator.py<br/>主循环<br/>决策 · 分发 · 状态推进 · 预算提醒 · 收尾"]
+        UI["app.py<br/>Web 界面（可选）<br/>换掉 emit 的输出目标"]
     end
     subgraph L2["Agent 运行时 · agent/"]
         LLM["llm.py<br/>LLMClient.chat / embed<br/>重试 · 错误分类"]
@@ -42,6 +43,7 @@ flowchart TB
         CHROMA["Chroma 持久化向量库<br/>.kb/"]
     end
     MAIN --> LLM
+    UI --> MAIN
     MAIN --> TOOLS
     MAIN --> PROMPT
     MAIN --> CAND
@@ -114,6 +116,44 @@ while turn < max_turns and not toolbox.finished:
 **为什么不用"有没有问号"单条判断？**
 因为出题用的是「请实现……请说明……」这种祈使句，一个问号都没有。
 第一版就是栽在这儿：模型被判成自言自语 → 注入点头 → 以为题没问出去 → 再问一遍……30 轮空转。
+
+---
+
+### 3.4 输出通道：所有输出只走一个口子（阶段 6）
+
+```python
+_sink: Callable[[str], None] = lambda text: print(text)   # 默认：打到终端
+
+def emit(text: str = "") -> None:
+    _sink(text)
+
+def set_sink(sink: Callable[[str], None] | None) -> None:
+    global _sink
+    _sink = sink if sink is not None else (lambda text: print(text))
+```
+
+主循环里 55 处输出全部走 `emit()`。命令行下行为一个字不变（默认就是 `print`），
+界面里 `set_sink()` 一换就接管了输出。
+
+**界面为什么不直接重定向 `sys.stdout`**（本来是最省事的做法）：
+
+1. Streamlit 是多线程的，重定向全局 stdout **不是线程安全的**；
+2. 那样只能拿到一坨裸文本，拿不到「第几轮、调了哪个工具」这类结构化信息，
+   页面里就做不出轮次卡片；
+3. 已经被 stdout 混入无关内容坑过一次 —— 宿主的钩子日志混进过输出。
+
+代价是 `orchestrator.py` 要动 55 处。验证方式：把 git 里的旧版本拉出来一起跑
+`--list-providers` / `--list-runs`，**逐行比对**输出；再加一场 3 轮的真跑，
+确认主循环内部那些输出（预算提醒、工具调用、面试官/候选人发言、统计块）都在。
+
+`tests/test_emit.py::test_no_print_bypasses_the_channel` 是一条**结构约束**测试：
+文件里不允许再出现绕过通道的裸 `print()`。
+这类 bug 在命令行下完全看不出来，只有界面里会少几行 —— 属于最难发现的一种。
+
+**界面里一律 `interactive=False`**：终端那套「限流了，等 60 秒 / 换模型 / 改 Key / 放弃」的菜单
+要等人敲键盘，网页里没有键盘可敲。所以界面走无人值守分支 ——
+出故障直接出一份「不完整但真实」的报告，配一个「从断点续跑」的按钮。
+**断点（阶段 5 ③）在界面这一层的价值就在这里体现出来了。**
 
 ---
 
@@ -289,6 +329,8 @@ score_answer(question_id, answer)
 | 想改什么 | 改哪 |
 |---|---|
 | 循环行为、预算提醒、中断策略 | `orchestrator.py` |
+| 主循环怎么往外写（换输出目标） | `orchestrator.py` 的 `emit()` / `set_sink()` |
+| Web 界面长什么样 | `app.py`（Streamlit，`streamlit run app.py`） |
 | 重试策略、超时、错误分类 | `agent/llm.py`（`RETRY_BASE`） |
 | 供应商怎么认、Key 的变量名 | `agent/providers.py`（注册表） |
 | 断点存什么、怎么续 | `agent/checkpoint.py` |
@@ -325,7 +367,7 @@ docs/examples/run14_report.json ─┘
 ### 改完怎么验证
 
 ```bash
-python -m pytest tests -v     # 261 项，离线，不需要 API Key，实测 1.75 秒
+python -m pytest tests -v     # 280 项，离线，不需要 API Key，实测约 3 秒
 python e2e_test.py           # 工具链路端到端自检（也不调模型）
 ```
 
@@ -361,7 +403,8 @@ python e2e_test.py           # 工具链路端到端自检（也不调模型）
    这里踩过一次：等权 RRF 看着最"标准"，实测比单路还差。别凭感觉说变好了。
 7. **换供应商 / 换模型** —— 注册表在 `agent/providers.py`（按模型名自动认端点、
    认 Key 的变量名），错误分类在 `agent/llm.py`，断点续跑在 `agent/checkpoint.py`。
-8. **Web 界面** —— `orchestrator.py` 的核心函数 `run_interview()` 与打印逻辑是分开的，可以直接被 Streamlit 调用。
+8. **Web 界面** —— 已经落地了（`app.py`）。它是怎么接上主循环的、以及为什么**不是**去重定向
+   `sys.stdout`，见下面「输出通道」那一节。
 
 ---
 
@@ -375,6 +418,7 @@ python e2e_test.py           # 工具链路端到端自检（也不调模型）
 | 上下文传递 | Lead 显式路由给 Worker | `messages` 一份历史全带 |
 | Skill | 11 个独立 SKILL.md | 收敛进 `agent/prompts.py` 和工具实现 |
 | 评分 | mock 按字数打分 | LLM 判断维度 + 代码算加权分 |
+| 界面 | 无（跑在平台里） | 命令行 + Streamlit Web 界面（`app.py`） |
 
 **为什么从 5 个 Agent 收敛成 1 个？**
 因为"多 Agent"在早期形态里是**平台强制的形态**（每个 Worker 是一个独立会话），
