@@ -201,17 +201,32 @@ def test_collect_files_accepts_explicit_file_and_skips_missing(tmp_path):
 
 
 class _FakeCollection:
+    """够用的假向量库：只实现 retrieve 会碰到的那几个方法。"""
+
     def __init__(self, distances, limit_seen=None):
         self._distances = distances
         self.limit_seen = limit_seen
+        self._ids = [f"doc{i}" for i in range(len(distances))]
 
     def count(self):
         return len(self._distances)
+
+    def get(self, include=None):
+        # retrieve 会先摸一遍全量片段（向量路的距离要回填到每个片段上，
+        # 关键词路也要一份语料），所以假库也得给得出来。
+        return {
+            "ids": list(self._ids),
+            "documents": [f"片段{i}" for i in range(len(self._distances))],
+            "metadatas": [
+                {"source": "redis.md", "chunk": i} for i in range(len(self._distances))
+            ],
+        }
 
     def query(self, query_embeddings, n_results):
         if self.limit_seen is not None:
             self.limit_seen.append(n_results)
         return {
+            "ids": [list(self._ids)],
             "documents": [[f"片段{i}" for i in range(len(self._distances))]],
             "metadatas": [
                 [{"source": "redis.md", "chunk": i} for i in range(len(self._distances))]
@@ -251,21 +266,27 @@ def test_retrieve_converts_cosine_distance_to_similarity(monkeypatch):
 
     _stub_embedding(monkeypatch, _FakeCollection([0.1, 0.4]))
 
-    hits = search.retrieve("缓存一致性", k=3)
+    hits = search.retrieve("缓存一致性", k=3, mode="vector")
     assert [h["score"] for h in hits] == [0.9, 0.6]
     assert hits[0]["source"] == "redis.md"
     assert hits[0]["chunk"] == 0
 
 
-def test_retrieve_clamps_k_to_collection_size(monkeypatch):
-    """库里只有 2 块时，要 5 条不能报错 —— n_results 得夹紧。"""
+def test_retrieve_asks_the_store_for_every_chunk(monkeypatch):
+    """★ 向量路是拿库里**全部**片段算距离的，不是 min(k, 总数)。
+
+    因为距离要回填到每个片段上：关键词路召回的片段也得有个真实的相似度，
+    不能让它显示成"没有分" —— 那样模型不知道该不该信它。
+    另外 k 比库大也不能报错（有多少给多少）。
+    """
     from kb import search
 
     seen: list[int] = []
     _stub_embedding(monkeypatch, _FakeCollection([0.2, 0.3], seen))
 
-    search.retrieve("query", k=5)
-    assert seen == [2]
+    hits = search.retrieve("query", k=5, mode="vector")
+    assert seen == [2]         # 库里就 2 条，就取 2 条
+    assert len(hits) == 2      # 要 5 条也不报错
 
 
 def test_empty_store_returns_empty_without_embedding(monkeypatch):
@@ -297,7 +318,7 @@ def test_retrieve_refuses_when_store_built_by_another_model(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="--rebuild"):
-        search.retrieve("q")
+        search.retrieve("q", mode="vector")
 
 
 def test_retrieve_allows_legacy_store_without_signature(monkeypatch):
@@ -305,7 +326,7 @@ def test_retrieve_allows_legacy_store_without_signature(monkeypatch):
     from kb import search
 
     _stub_embedding(monkeypatch, _FakeCollection([0.1]), built=None)
-    assert len(search.retrieve("q")) == 1
+    assert len(search.retrieve("q", mode="vector")) == 1
 
 
 # ===========================================================================

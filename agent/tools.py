@@ -397,6 +397,7 @@ class ToolBox:
         """
         try:
             from kb.embed import provider_info
+            from kb.fusion import DEFAULT_FUSION
             from kb.search import retrieve
         except ImportError as exc:  # noqa: BLE001
             return {"error": f"知识库依赖未安装（需要 chromadb / pypdf）: {exc}"}
@@ -414,9 +415,16 @@ class ToolBox:
                 "top_k": top_k,
                 "hits": hits,
                 "hit_count": len(hits),
-                # 动态反映实际用的向量化后端（智谱 embedding-3 / 本地 bge-small-zh）
-                "retriever": f"vector: chroma + {provider_info()['signature']}",
-                "note": "score 是 0~1 的语义相似度，越高越相关；source 是片段出处",
+                # 动态反映实际用的后端：向量是哪家算的、有没有走混合检索
+                "retriever": (
+                    f"hybrid: chroma 向量 + BM25 关键词（{DEFAULT_FUSION} 融合）"
+                    f" · {provider_info()['signature']}"
+                ),
+                "note": (
+                    "score 是 0~1 的语义相似度，越高越相关；"
+                    "via 说明这条是靠什么召回的（vector 语义 / keyword 关键词 / both 两路都命中）；"
+                    "source 是片段出处"
+                ),
             }
 
         # 向量库为空 → 回退到场景自带的 jd_kb（关键词匹配）
