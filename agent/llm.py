@@ -58,6 +58,105 @@ RETRY_BASE = {
 }
 DEFAULT_RETRY_BASE = 3
 
+
+# ---------------------------------------------------------------------------
+# 失败分类
+#
+# ★ 这一层只回答「为什么失败」，**不决定「怎么办」**。
+#
+# 为什么值得单独分一层：不同原因的应对方式完全不一样 ——
+# 限流等一会儿就好；Key 错了等多久都没用；模型名不存在更是重试到死也白搭。
+# 三者现在被压成同一句"调用失败"，上层就只能一刀切（目前正是一刀切：一律放弃）。
+#
+# 分类规则只有这一份（这里），策略在上层（orchestrator 的失败升级阶梯），
+# 两边可以各自独立地改：加一个种类不用动策略，改策略也不用回来动分类。
+# ---------------------------------------------------------------------------
+
+ERROR_KINDS = ("rate_limit", "auth", "model_missing", "network", "server", "other")
+
+# 状态码 → 种类。有明确对应关系的先按状态码判。
+_KIND_BY_STATUS = {
+    429: "rate_limit",   # 智谱的限流就是 429（响应体里是 code=1305「该模型访问量过大」）
+    401: "auth",
+    403: "auth",
+    404: "model_missing",
+}
+
+
+# 平台自己的错误码（响应体里的 error.code）。
+#
+# ★ 实测校准过：模型名写错时智谱返回的是
+#       HTTP 400 {"error":{"code":"1211","message":"模型不存在，请检查模型代码。"}}
+#   —— 状态码是 400（看着像"参数写错了"，其实含义明确得多），文案还是中文。
+#   光靠状态码 + 英文关键词会把它判成 other。
+#   **按数字判比按文案判可靠：文案会变、会翻译，错误码不会。**
+_KIND_BY_PLATFORM_CODE = {
+    "1211": "model_missing",   # 模型不存在，请检查模型代码
+    "1305": "rate_limit",      # 该模型当前访问量过大（实测出现在 HTTP 429 里）
+}
+
+
+def _platform_code(body: str) -> str | None:
+    """从响应体里抠出平台错误码，抠不到返回 None。"""
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    err = data.get("error")
+    if isinstance(err, dict) and err.get("code") is not None:
+        return str(err["code"])
+    if data.get("code") is not None:
+        return str(data["code"])
+    return None
+
+
+def _classify_text(body: str) -> str:
+    """最后一道兜底：只认**很窄**的几个关键词（中英都认）。
+
+    刻意不做文本语义猜测 —— 把任意文案当分类依据太容易误判，
+    而拿错策略比不分类更糟：把"Key 过期"当成"网络抖动"，
+    就会一直重试到天荒地老。
+    """
+    low = (body or "").lower()
+    if any(
+        h in low
+        for h in ("invalid api key", "unauthorized", "authentication failed", "令牌", "验证不正确")
+    ):
+        return "auth"
+    if any(
+        h in low
+        for h in ("model not found", "model_not_found", "no such model", "模型不存在")
+    ):
+        return "model_missing"
+    if any(h in low for h in ("rate limit", "too many requests", "访问量过大", "速率限制")):
+        return "rate_limit"
+    return "other"
+
+
+def classify_error(status: int, body: str = "") -> str:
+    """把一个**带 HTTP 状态码**的失败响应归类到 ERROR_KINDS。
+
+    三级判断，从最可靠往下走：
+      ① 平台错误码  —— 最准，不受状态码语义和文案语言影响
+      ② HTTP 状态码 —— 通用规则（429 限流 / 401·403 认证 / 404 / 5xx）
+      ③ 文案关键词  —— 兜底，中英都认
+
+    连接失败（压根没收到响应）不走这里 —— 那种情况调用方直接判 network，
+    因为没有状态码可依据。
+    """
+    code = _platform_code(body)
+    if code is not None and code in _KIND_BY_PLATFORM_CODE:
+        return _KIND_BY_PLATFORM_CODE[code]
+
+    if status in _KIND_BY_STATUS:
+        return _KIND_BY_STATUS[status]
+    if 500 <= status < 600:
+        return "server"
+    return _classify_text(body)
+
+
 # 模型偶尔会把思维链的结束标签漏在正文里，长这样：
 #   "好的，请开始你的回答。</think></think> 好的，请开始你的回答。……"
 # 这是推理框架的产物，不该出现在对话正文中（会污染上下文、也难看）。
@@ -74,7 +173,22 @@ def _clean_text(text: str | None) -> str | None:
 
 
 class LLMError(RuntimeError):
-    """重试完仍然失败。"""
+    """一次调用最终失败了。
+
+    kind 是给上层做决策用的（取值见 ERROR_KINDS）——
+    限流可以等、Key 错了只能换、模型名不存在则重试没有意义。
+    底层只负责标清楚是哪一类，**不替上层决定怎么办**。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        kind: str = "other",
+        status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.status = status   # HTTP 状态码；连接失败时为 None
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +240,13 @@ class LLMClient:
         verbose: bool = True,
     ) -> None:
         if not api_key:
-            raise ValueError("缺少 API Key。请把 .env.example 复制成 .env 并填入 ZHIPU_API_KEY")
+            # 用 LLMError 而不是 ValueError：这本质上就是"认证失败"。
+            # 对上层来说，「没配 Key」和「Key 过期了」是同一件事 —— 都得让用户去改配置，
+            # 所以它们该是同一个 kind，而不是两种异常类型。
+            raise LLMError(
+                "缺少 API Key。请把 .env.example 复制成 .env 并填入 ZHIPU_API_KEY",
+                kind="auth",
+            )
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -159,19 +279,26 @@ class LLMClient:
         没必要写两遍。
         """
         last_err = ""
+        last_kind = "other"
+        last_status: int | None = None
+
         for attempt in range(1, self.max_retries + 1):
             retry_base = DEFAULT_RETRY_BASE
             try:
                 resp = self._post(path, payload)
             except requests.RequestException as exc:
+                # 连接失败 = 压根没收到响应，没有状态码可依据，直接判 network
                 last_err = f"网络异常: {exc}"
+                last_kind, last_status = "network", None
             else:
                 if resp.status_code == 200:
                     return resp.json()
                 last_err = f"HTTP {resp.status_code}: {resp.text[:300]}"
+                last_kind = classify_error(resp.status_code, resp.text)
+                last_status = resp.status_code
                 if resp.status_code not in RETRYABLE_STATUS:
                     # 4xx 里除了限流，都是我们自己的问题，重试没意义
-                    raise LLMError(last_err)
+                    raise LLMError(last_err, kind=last_kind, status=last_status)
                 # 限流这类故障恢复得慢，退避要长一点（见 RETRY_BASE 的注释）
                 retry_base = RETRY_BASE.get(resp.status_code, DEFAULT_RETRY_BASE)
 
@@ -181,7 +308,14 @@ class LLMClient:
                     print(f"    [重试 {attempt}/{self.max_retries - 1}] {last_err} —— {wait}s 后再试")
                 time.sleep(wait)
 
-        raise LLMError(f"连续 {self.max_retries} 次失败，最后一次: {last_err}")
+        # ★ 重试耗尽时，kind 必须保留**最后一次失败的原因**，不能丢。
+        #   上层的失败升级阶梯就靠它决定下一步：切备选模型、让用户换 Key、
+        #   还是直接放弃出报告。丢掉它，上层就只剩"失败了"这一条信息。
+        raise LLMError(
+            f"连续 {self.max_retries} 次失败，最后一次: {last_err}",
+            kind=last_kind,
+            status=last_status,
+        )
 
     # -- 对外 ---------------------------------------------------------------
 
@@ -236,7 +370,10 @@ class LLMClient:
 
     def _parse(self, data: dict) -> LLMReply:
         if "error" in data:
-            raise LLMError(json.dumps(data["error"], ensure_ascii=False))
+            # HTTP 200 却塞了个 error 体：少见，但平台偶发。
+            # 此时没有状态码可依据，只能看文案，判不出来就是 other。
+            text = json.dumps(data["error"], ensure_ascii=False)
+            raise LLMError(text, kind=_classify_text(text))
 
         choice = data["choices"][0]
         msg = choice["message"]

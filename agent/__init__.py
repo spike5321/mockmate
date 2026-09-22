@@ -13,14 +13,16 @@
 """
 
 from agent.candidate import CandidateSim
-from agent.llm import LLMClient, LLMError, LLMReply
+from agent.llm import ERROR_KINDS, LLMClient, LLMError, LLMReply, classify_error
 from agent.tools import TOOL_SCHEMAS, ToolBox
 
 __all__ = [
     "CandidateSim",
+    "ERROR_KINDS",
     "LLMClient",
     "LLMError",
     "LLMReply",
     "TOOL_SCHEMAS",
     "ToolBox",
+    "classify_error",
 ]
