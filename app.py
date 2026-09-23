@@ -20,9 +20,7 @@
      「不完整但真实」的报告，想接着跑就用下面的续跑按钮 ——
      这也正是断点（阶段 5 ③）在这里的用处。
 
-★ 已知限制（不是 bug，是这一轮的范围）：同一时刻只支持一个人跑。
-  `set_sink` 是模块级的，两个人同时点"开始"会互相抢输出。
-  自己用的演示工具，先不引入会话隔离。
+输出通道在运行线程内设置；不同会话的演示输出互不干扰。
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -105,9 +103,8 @@ def stream_run(**kwargs) -> dict:
     pipe: queue.Queue[str | None] = queue.Queue()
     outcome: dict = {}
 
-    orchestrator.set_sink(pipe.put)
-
     def worker() -> None:
+        orchestrator.set_sink(pipe.put)
         try:
             outcome["summary"] = orchestrator.run_interview(**kwargs)
         except BaseException as exc:  # noqa: BLE001
@@ -115,22 +112,18 @@ def stream_run(**kwargs) -> dict:
             # 那样用户看到的是"点了没反应"，比一条错误信息糟糕得多。
             outcome["error"] = exc
         finally:
+            orchestrator.set_sink(None)
             pipe.put(None)          # 结束信号
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
 
-    try:
-        while True:
-            item = pipe.get()
-            if item is None:
-                break
-            lines.append(item)
-            box.code("\n".join(lines), language=None)
-    finally:
-        # 无论怎么退出，都要把输出目标还给终端 —— 否则下一次跑（或命令行里跑）
-        # 会静默地把输出丢进一个没人看的队列。
-        orchestrator.set_sink(None)
+    while True:
+        item = pipe.get()
+        if item is None:
+            break
+        lines.append(item)
+        box.code("\n".join(lines), language=None)
 
     thread.join(timeout=5)
     return outcome

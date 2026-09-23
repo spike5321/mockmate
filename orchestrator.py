@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -65,13 +66,17 @@ LINE = "─" * 72
 #   ③ 我们已经被 stdout 混入无关内容坑过（宿主的钩子日志混进过输出）。
 # ---------------------------------------------------------------------------
 
-#: 当前输出目标。默认直接打印。
-_sink: Callable[[str], None] = lambda text: print(text)
+#: 每场运行只修改自己的线程，避免两个网页会话互相接管输出。
+_sink_local = threading.local()
 
 
 def emit(text: str = "") -> None:
     """所有输出的唯一出口。"""
-    _sink(text)
+    sink = getattr(_sink_local, "sink", None)
+    if sink is None:
+        print(text)
+    else:
+        sink(text)
 
 
 def set_sink(sink: Callable[[str], None] | None) -> None:
@@ -79,8 +84,7 @@ def set_sink(sink: Callable[[str], None] | None) -> None:
 
     只在进程内生效，不改变任何逻辑 —— 纯输出层的事。
     """
-    global _sink
-    _sink = sink if sink is not None else (lambda text: print(text))
+    _sink_local.sink = sink
 
 
 # ---------------------------------------------------------------------------
@@ -654,6 +658,8 @@ def run_interview(
             # spoken 也要给它：自由追问有可能换话题（上一题问算法，
             # 这一句突然说"聊聊你的项目"），只有读到原话才判得出来。
             answer = candidate.answer_for(question, spoken=spoken)
+            if question is not None:
+                toolbox.record_answer(str(question["id"]), answer)
             nod_streak = 0
             if verbose:
                 emit(f"       🙋 候选人：{clip(answer, 300)}")

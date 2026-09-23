@@ -246,7 +246,7 @@ def test_score_unknown_id_returns_hint(box):
     报错必须捎上"该怎么拿到一个存在的 id"。
     """
     ok, payload = box.dispatch(
-        "score_answer", {"question_id": "pick_question_coding_1", "answer": LONG_ANSWER}
+        "score_answer", {"question_id": "pick_question_coding_1"}
     )
     assert ok is False
     assert "没有出过" in payload["error"]
@@ -256,7 +256,8 @@ def test_score_unknown_id_returns_hint(box):
 
 def test_score_after_pick_appends_record(box):
     _, q = box.dispatch("pick_question", {"track": "coding", "difficulty": "medium"})
-    ok, record = box.dispatch("score_answer", {"question_id": q["id"], "answer": LONG_ANSWER})
+    box.record_answer(q["id"], LONG_ANSWER)
+    ok, record = box.dispatch("score_answer", {"question_id": q["id"]})
     assert ok is True
     assert record["question_id"] == q["id"]
     assert isinstance(record["score"], int)
@@ -264,10 +265,24 @@ def test_score_after_pick_appends_record(box):
     assert len(box.records) == 1
 
 
+def test_score_uses_recorded_answer_and_rejects_model_supplied_answer(box):
+    _, q = box.dispatch("pick_question", {"track": "hr", "stage": "self_intro"})
+    ok, payload = box.dispatch("score_answer", {"question_id": q["id"]})
+    assert not ok and "还没有候选人回答" in payload["error"]
+    box.record_answer(q["id"], "这是候选人原话")
+    ok, payload = box.dispatch(
+        "score_answer", {"question_id": q["id"], "answer": "模型编造的高分答案"}
+    )
+    assert not ok and "参数不匹配" in payload["error"]
+    ok, record = box.dispatch("score_answer", {"question_id": q["id"]})
+    assert ok and record["answer"] == "这是候选人原话"
+
+
 def test_record_carries_source_and_dimensions(box):
     """降级也要标出来 —— 报告里必须能看出哪几题不是 LLM 评的。"""
     _, q = box.dispatch("pick_question", {"track": "system_design"})
-    _, record = box.dispatch("score_answer", {"question_id": q["id"], "answer": LONG_ANSWER})
+    box.record_answer(q["id"], LONG_ANSWER)
+    _, record = box.dispatch("score_answer", {"question_id": q["id"]})
     assert record["source"] in {"rule", "rule-fallback", "llm"}
     assert isinstance(record["dimensions"], dict)
 
@@ -331,7 +346,8 @@ def test_submit_report_anchors_overall_score_to_records(box, sandbox_scenarios):
     """
     for track, difficulty in (("coding", "medium"), ("system_design", None)):
         _, q = box.dispatch("pick_question", {"track": track, "difficulty": difficulty})
-        box.dispatch("score_answer", {"question_id": q["id"], "answer": LONG_ANSWER})
+        box.record_answer(q["id"], LONG_ANSWER)
+        box.dispatch("score_answer", {"question_id": q["id"]})
 
     ok, payload = box.dispatch(
         "submit_report",
@@ -351,7 +367,8 @@ def test_submit_report_anchors_overall_score_to_records(box, sandbox_scenarios):
 def test_report_files_land_in_sandbox(box, sandbox_scenarios):
     """报告确实落盘了，而且落在沙箱里（不覆盖仓库那份真实报告）。"""
     _, q = box.dispatch("pick_question", {"track": "hr", "stage": "self_intro"})
-    box.dispatch("score_answer", {"question_id": q["id"], "answer": LONG_ANSWER})
+    box.record_answer(q["id"], LONG_ANSWER)
+    box.dispatch("score_answer", {"question_id": q["id"]})
     box.dispatch(
         "submit_report",
         {
@@ -404,7 +421,8 @@ def test_partial_report_is_refused_when_nothing_scored(box):
 def test_partial_report_marks_interruption(box, sandbox_scenarios):
     """★ 中断兜底：已评的分必须保住，且要写清这是不完整的结果。"""
     _, q = box.dispatch("pick_question", {"track": "coding", "difficulty": "easy"})
-    box.dispatch("score_answer", {"question_id": q["id"], "answer": LONG_ANSWER})
+    box.record_answer(q["id"], LONG_ANSWER)
+    box.dispatch("score_answer", {"question_id": q["id"]})
 
     out = box.submit_partial_report("限流：账户已达到速率限制")
     assert out is not None
@@ -433,7 +451,8 @@ def test_end_interview_marks_finished(box):
 def test_summary_separates_llm_and_rule_scoring(box):
     """summary 里 llm / rule 分开计数 —— "有多少题是真 LLM 评的"本身就是质量指标。"""
     _, q = box.dispatch("pick_question", {"track": "coding", "difficulty": "medium"})
-    box.dispatch("score_answer", {"question_id": q["id"], "answer": LONG_ANSWER})
+    box.record_answer(q["id"], LONG_ANSWER)
+    box.dispatch("score_answer", {"question_id": q["id"]})
     s = box.summary()
     assert s["questions_asked"] == 1
     assert s["answers_scored"] == 1
@@ -446,7 +465,8 @@ def test_avg_by_track(box):
     """分量表未评分的题型不应出现空桶。"""
     for track, difficulty in (("coding", "medium"), ("coding", "easy"), ("system_design", None)):
         _, q = box.dispatch("pick_question", {"track": track, "difficulty": difficulty})
-        box.dispatch("score_answer", {"question_id": q["id"], "answer": LONG_ANSWER})
+        box.record_answer(q["id"], LONG_ANSWER)
+        box.dispatch("score_answer", {"question_id": q["id"]})
 
     avg = box.avg_by_track()
     assert set(avg) == {"coding", "system_design"}
@@ -456,14 +476,17 @@ def test_avg_by_track(box):
 def test_records_are_json_serializable(box):
     """逐题记录里混进不可序列化对象 → 整场报告落盘失败。"""
     _, q = box.dispatch("pick_question", {"track": "hr", "stage": "self_intro"})
-    box.dispatch("score_answer", {"question_id": q["id"], "answer": LONG_ANSWER})
+    box.record_answer(q["id"], LONG_ANSWER)
+    box.dispatch("score_answer", {"question_id": q["id"]})
     json.loads(box.dump_records())
 
 
 def test_short_answer_scores_lower_than_long_one(box):
     """规则打分（降级路径）的行为锁定：它只看长度。"""
     _, q1 = box.dispatch("pick_question", {"track": "coding", "difficulty": "medium"})
-    _, short = box.dispatch("score_answer", {"question_id": q1["id"], "answer": SHORT_ANSWER})
-    _, q2 = box.dispatch("pick_question", {"track": "coding", "difficulty": "hard"})
-    _, long = box.dispatch("score_answer", {"question_id": q2["id"], "answer": LONG_ANSWER})
+    box.record_answer(q1["id"], SHORT_ANSWER)
+    _, short = box.dispatch("score_answer", {"question_id": q1["id"]})
+    _, q2 = box.dispatch("pick_question", {"track": "system_design"})
+    box.record_answer(q2["id"], LONG_ANSWER)
+    _, long = box.dispatch("score_answer", {"question_id": q2["id"]})
     assert short["score"] < long["score"]

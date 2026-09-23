@@ -167,9 +167,8 @@ TOOL_SCHEMAS: list[dict] = [
                 "type": "object",
                 "properties": {
                     "question_id": {"type": "string", "description": "题目 id（必须来自出题工具的返回值）"},
-                    "answer": {"type": "string", "description": "候选人刚才的原话"},
                 },
-                "required": ["question_id", "answer"],
+                "required": ["question_id"],
             },
         },
     },
@@ -267,6 +266,7 @@ class ToolBox:
         # --- 会话状态（Agent 的短期记忆）---
         self.questions: dict[str, dict] = {}   # question_id -> 题目原文
         self.records: list[dict] = []           # 逐题记录：题目 / 回答 / 分数
+        self.answers: dict[str, list[str]] = {}  # 候选人原话，由程序记录
         self.last_question: dict | None = None  # 最近一次出的题（给模拟候选人用）
         self.custom_count = 0                   # 已登记的自拟题数量（用来生成 id）
 
@@ -305,6 +305,7 @@ class ToolBox:
         return {
             "questions": self.questions,
             "records": self.records,
+            "answers": self.answers,
             "last_question": self.last_question,
             "custom_count": self.custom_count,
             "pending_question": self.pending_question,
@@ -325,6 +326,7 @@ class ToolBox:
         for key in (
             "questions",
             "records",
+            "answers",
             "last_question",
             "custom_count",
             "pending_question",
@@ -517,7 +519,13 @@ class ToolBox:
             "note": "已登记。现在照 question 原文向候选人提问，等他回答后用这个 id 评分。",
         }
 
-    def _t_score_answer(self, question_id: str, answer: str) -> dict:
+    def record_answer(self, question_id: str, answer: str) -> None:
+        """只由候选人输入通道调用，模型不能提供或改写评分答案。"""
+        if question_id not in self.questions:
+            raise ValueError(f"没有出过 id={question_id} 的题")
+        self.answers.setdefault(question_id, []).append(answer)
+
+    def _t_score_answer(self, question_id: str) -> dict:
         q = self.questions.get(question_id)
         if q is None:
             # ★ 报错时顺手给一条「合法路径」。
@@ -534,6 +542,11 @@ class ToolBox:
                 ),
             }
 
+        if question_id not in self.answers:
+            return {"error": "这道题还没有候选人回答，不能评分"}
+        if any(r["question_id"] == question_id for r in self.records):
+            return {"error": "这道题已经评分，不能重复评分"}
+        answer = "\n".join(self.answers[question_id])
         result = self._evaluate(q, answer)
         record = {
             "question_id": question_id,

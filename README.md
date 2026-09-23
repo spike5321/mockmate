@@ -5,7 +5,18 @@
 > 这是一个**自研的 LLM Agent 调度循环**：模型自己决定下一步做什么——读简历、检索岗位情报、出题、追问、打分、交报告、结束，
 > 循环什么时候停也由它判断。**决策循环是这个仓库自己写的代码，不依赖任何 Agent 框架。**
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational) ![Tests](https://img.shields.io/badge/tests-280%20passed-brightgreen)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Tools](https://img.shields.io/badge/tools-8-informational)
+
+## 真人面试（AI 应用开发岗位）
+
+```bash
+pip install -r requirements.txt
+streamlit run live_app.py
+```
+
+在页面上传 PDF / DOCX / TXT 简历（或粘贴文本），确认解析结果，粘贴目标 JD，填入自己的模型 API Key，然后逐题回答。系统围绕**项目经历、RAG、Agent 与工具调用、评测与工程实践、行为沟通**各问一题，每题最多追问两次、整场最多追问两次；结束后可下载 Markdown 和 JSON 报告。评分只使用程序保存的候选人原话，总分由逐题分计算。简历、回答和 Key 只在当前会话内存中保存；可随时点击“清除本次数据”。会话失效后下一次访问会清除数据，不提供历史回顾；所用模型服务商仍按其自身政策处理请求。
+
+公开部署入口是 `public/app.py`，它有独立的轻量依赖清单。**当前仓库提供部署配置，公开体验链接尚待上线验证。** 真人面试用自己的 Key；原来的 `app.py` 和 `orchestrator.py` 仍是固定场景、脚本候选人的可复现演示。真人面试与原演示的架构和验收说明见 [真人面试说明](docs/live-interview.md)；三份合成简历的真实模型基线及局限见 [评测记录](docs/evaluation-results.md)。
 
 ### ▶ 先看这个：一次真实运行的完整回放
 
@@ -21,7 +32,7 @@
 
 ## 1. 它能做什么
 
-**输入**：一份简历 + 一个目标岗位 JD（都在 `scenarios/*.json` 里）
+**以下是原有脚本演示模式**：输入是 `scenarios/*.json` 中的简历与岗位 JD。
 **输出**：一场约 30 轮的多轮面试 + 一份结构化复盘报告
 
 ```bash
@@ -305,7 +316,7 @@ python e2e_test.py     # 离线跑一遍工具链路，不调模型、不消耗�
 ### 跑测试
 
 ```bash
-python -m pytest tests -v     # 280 项，离线，不需要 API Key，实测约 3 秒
+python -m pytest tests -v     # 300 项，离线，不需要 API Key
 ```
 
 单测只覆盖**确定性**的部分——也就是"能被机器判定对错"的那些：
@@ -324,6 +335,7 @@ python -m pytest tests -v     # 280 项，离线，不需要 API Key，实测约
 | `tests/test_orchestrator.py` | 主循环行为：连续 3 轮无工具调用要提醒、正常面试不能误报、提醒只说一次；**临时 Key 不落盘**（跑完整场后翻遍断点和轨迹） |
 | `tests/test_emit.py` | 输出通道：默认打印、换掉之后终端干净、能恢复；**主循环里不允许再有绕过通道的裸 print()** |
 | `tests/test_app.py` | 界面冒烟（用 Streamlit 自带的 `AppTest` 真跑一遍脚本）：页面无异常、控件齐、**临时 Key 的输入框必须是密码框** |
+| `tests/test_live.py` / `tests/test_live_app.py` | 真人会话隔离、追问上限、原话评分、失败恢复、隐私清除、上传解析及网页逐题交互 |
 
 **六条刻意写进测试的设计约束**（以后有人"顺手"改掉会立刻红）：
 
@@ -488,6 +500,8 @@ python orchestrator.py --list-providers     # 有哪些供应商、Key 配没配
 mockmate/
 ├── orchestrator.py              # ★ 主循环（这个项目的核心）
 ├── app.py                       # Web 界面（Streamlit，可选）
+├── live_app.py                  # 真人文字面试网页（内存会话）
+├── public/                      # Streamlit Community Cloud 轻量部署入口
 ├── agent/                       # Agent 运行时
 │   ├── llm.py                   #   LLM 客户端（chat + embed + 重试 + 错误分类）
 │   ├── providers.py             #   供应商注册表（按模型名认端点、认 Key 变量名）
@@ -495,7 +509,9 @@ mockmate/
 │   ├── tools.py                 #   8 个工具的 Schema 与调度
 │   ├── prompts.py               #   面试官系统提示词
 │   ├── candidate.py             #   模拟候选人（话题感知 + 会认输）
-│   └── evaluator.py             #   单题 LLM 评分器
+│   ├── evaluator.py             #   单题 LLM 评分器
+│   ├── live.py                  #   真人会话：逐题暂停、追问、评分、报告
+│   └── resume.py                #   上传简历的内存解析
 ├── kb/                          # 检索层（混合检索）
 │   ├── embed.py                 #   向量化唯一入口（智谱 / 本地模型）
 │   ├── store.py                 #   按标题切分 + 入库
@@ -518,8 +534,8 @@ mockmate/
 └── e2e_test.py                  # 离线工具自检
 ```
 
-整个仓库里，**只有 `orchestrator.py` / `agent/` / `kb/` / `tools/mock_tools.py` 这四块是运行时会用到的**，
-其余都是数据（`scenarios/` `knowledge/`）、文档（`docs/`）或历史归档（`legacy/`）。
+脚本演示走 `orchestrator.py`、`agent/`、`kb/`、`tools/mock_tools.py`；真人入口走 `live_app.py` 与
+`agent/live.py`、`agent/resume.py`。`legacy/` 不参与任何运行。
 
 ### 历史遗留
 
@@ -540,7 +556,7 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
 诚实地列出来，比藏着好：
 
 - **候选人不是 LLM**，是脚本模拟的。这是刻意的（保证可复现、可离线、不烧人工），但意味着"对话的另一半"不是 Agent。
-- **有 Web 界面了，但很朴素**：`streamlit run app.py` 能选场景/模型、填临时 Key、
+- **原有演示 Web 界面很朴素**：`streamlit run app.py` 能选场景/模型、填临时 Key、
   实时看面试过程、跑完看报告、失败了从断点续跑。**没有**账号、多场并发、运行中插话。
   同一时刻只支持一个人跑。界面**没有提交截图** ——
   它是 websocket 应用，Edge 无头模式的 `--virtual-time-budget` 在握手完成前就烧完了虚拟时钟，
@@ -569,7 +585,7 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
 - [x] **阶段 4** 门面
   - [x] README 重写 + mermaid 架构图 + 实测数据（取自 `traces/`，可审计）
   - [x] `docs/architecture.md` 重写为可上手版本
-  - [x] pytest 单测（离线、不花额度）—— 现在 280 项
+  - [x] pytest 单测（离线、不花额度）—— 现在 300 项
   - [x] **运行回放页**（`docs/replay/`，单文件静态 HTML，由轨迹生成）+ GitHub Pages
   - [x] 旧目录归档到 `legacy/`、`.mailmap` 统一贡献者身份
   - [x] **本地 embedding 兜底**：不填 Key 也能建库、能检索（免 Key 免网络）
@@ -584,7 +600,13 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
   - [x] 主循环输出收成一个可替换的通道（55 处 `print` → `emit()`）
   - [x] **临时凭据**：界面上填的 Key 只在内存里，不写 `.env`、不进断点、不进 trace
   - [x] `app.py`：侧栏选场景/模型/凭据，主区实时滚动输出 + 报告 + 断点续跑
-  - [ ] （没做，也不打算做）账号、多场并发、运行中插话
+  - [ ] （旧演示模式未做）账号、运行中插话；真人模式使用独立会话支持多访客
+- [ ] **阶段 7** 真人文字面试（AI 应用开发）
+  - [x] 内存会话、简历上传和逐题作答；演示脚本入口保持可用
+  - [x] 程序保存候选人原话，评分模型只判断维度，程序计算报告总分
+  - [x] 三份合成简历的真实模型评测脚本与公开部署入口
+  - [x] 完成三场真实模型基线、人工复核并公布可追溯结果（题型偏移已修正提示，但修改后尚待复测）
+  - [ ] 部署公开体验并从新浏览器验收
 
 ---
 

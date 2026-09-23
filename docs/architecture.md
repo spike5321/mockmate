@@ -330,7 +330,10 @@ score_answer(question_id, answer)
 |---|---|
 | 循环行为、预算提醒、中断策略 | `orchestrator.py` |
 | 主循环怎么往外写（换输出目标） | `orchestrator.py` 的 `emit()` / `set_sink()` |
-| Web 界面长什么样 | `app.py`（Streamlit，`streamlit run app.py`） |
+| 真人面试 Web 界面 | `live_app.py` / `public/app.py` |
+| 可复现演示 Web 界面 | `app.py`（Streamlit，`streamlit run app.py`） |
+| 真人会话状态与评分汇总 | `agent/live.py`（内存会话，五类能力） |
+| PDF / DOCX / TXT 简历解析 | `agent/resume.py` |
 | 重试策略、超时、错误分类 | `agent/llm.py`（`RETRY_BASE`） |
 | 供应商怎么认、Key 的变量名 | `agent/providers.py`（注册表） |
 | 断点存什么、怎么续 | `agent/checkpoint.py` |
@@ -367,7 +370,7 @@ docs/examples/run14_report.json ─┘
 ### 改完怎么验证
 
 ```bash
-python -m pytest tests -v     # 280 项，离线，不需要 API Key，实测约 3 秒
+python -m pytest tests -v     # 300 项，离线，不需要 API Key
 python e2e_test.py           # 工具链路端到端自检（也不调模型）
 ```
 

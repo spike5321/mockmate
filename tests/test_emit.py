@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Barrier, Thread
 
 import pytest
 
@@ -70,6 +71,25 @@ def test_set_sink_none_restores_printing(capsys):
     assert capsys.readouterr().out == "又出来了\n"
 
 
+def test_two_parallel_sessions_have_separate_output_sinks():
+    ready = Barrier(2)
+    captured = {"a": [], "b": []}
+
+    def run(label):
+        orchestrator.set_sink(captured[label].append)
+        ready.wait()
+        orchestrator.emit(label)
+        orchestrator.set_sink(None)
+
+    threads = [Thread(target=run, args=(label,)) for label in captured]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+    assert captured == {"a": ["a"], "b": ["b"]}
+
+
 def test_escalation_menu_also_goes_through_the_channel():
     """★ 故障菜单也是输出的一部分。
 
@@ -94,13 +114,13 @@ def test_no_print_bypasses_the_channel():
     """★ 结构约束：主循环里不允许再有绕开 emit 的 print()。
 
     只要有人顺手写一个 print()，那一段在界面里就会凭空消失。
-    唯一允许出现 print 的地方是输出通道自己的默认实现（那两行带 `_sink`）。
+    唯一允许出现 print 的地方是 emit() 的默认终端输出。
     """
     source = (ROOT / "orchestrator.py").read_text(encoding="utf-8")
     offenders = [
         f"第 {number} 行: {line.strip()}"
         for number, line in enumerate(source.splitlines(), start=1)
-        if "print(" in line and "_sink" not in line
+        if "print(" in line and line.strip() != "print(text)"
     ]
     assert offenders == [], (
         "发现绕过输出通道的 print()，请改成 emit()：\n  " + "\n  ".join(offenders)

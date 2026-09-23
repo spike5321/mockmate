@@ -35,3 +35,5 @@ runs/
 
 # 知识库向量索引（二进制产物，可用 python -m kb.build 随时重建，不入库）
 .kb/
+.test-tmp-*/
+.pytest_cache/

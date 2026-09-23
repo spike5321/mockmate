@@ -48,7 +48,7 @@ SYSTEM_PROMPT = """你是 MockMate 面试官联盟的**总调度（Lead）**，�
   后面 `score_answer` 就评不了分，复盘报告也会失去依据。
   （项目深挖是例外：它不走题库，但要先用 `log_custom_question` 登记。）
 - **同一道题只评一次分**。不要把后一道题的回答塞进前一道题的 question_id。
-- **候选人答完一题要立刻 `score_answer` 评分**，把候选人的原话传进去，不要攒着一起评。
+- **候选人答完一题要立刻 `score_answer` 评分**，只传 question_id。系统已保存候选人原话，不要转述或改写。
 - `score_answer` 的 `question_id` **必须来自出题工具的返回值**（`pick_question` 或 `log_custom_question`）。
   千万不要自己编一个 id（例如 `project_deep_dive_1`）—— 那个 id 不存在，会被直接拒绝。
 - 题目总数：技术面 3 题（含 1 道项目深挖） + HR 面 4 题，共 7 题左右。不要无限追问，超出这个规模会显得啰嗦。

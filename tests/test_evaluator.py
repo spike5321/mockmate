@@ -316,7 +316,15 @@ def test_evidence_string_is_wrapped_into_list():
         ['{"dimensions": {"data_structure_choice": 1, "time_complexity": 1,'
          ' "edge_cases": 1, "code_clarity": 1}, "comment": "c", "evidence": "原话"}']
     )
-    assert ev.score(CODING_Q, "答案")["evidence"] == ["原话"]
+    assert ev.score(CODING_Q, "原话")["evidence"] == ["原话"]
+
+
+def test_hallucinated_evidence_is_not_reported():
+    ev, _ = _stub(
+        ['{"dimensions": {"data_structure_choice": 1, "time_complexity": 1,'
+         ' "edge_cases": 1, "code_clarity": 1}, "comment": "c", "evidence": "并未说过"}']
+    )
+    assert ev.score(CODING_Q, "实际回答")["evidence"] == []
 
 
 # ===========================================================================
