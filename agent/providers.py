@@ -65,8 +65,15 @@ PROVIDERS: dict[str, Provider] = {
         name="deepseek",
         base_url="https://api.deepseek.com/v1",
         api_key_env="DEEPSEEK_API_KEY",
-        models=("deepseek-chat",),
+        models=("deepseek-flash", "deepseek-chat"),
         note="OpenAI 兼容端点。",
+    ),
+    "qwen": Provider(
+        name="qwen",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key_env="DASHSCOPE_API_KEY",
+        models=("qwen3.5-flash",),
+        note="阿里云百炼华北2（北京）OpenAI 兼容端点；免费额度与计费以控制台为准。",
     ),
     "ollama": Provider(
         name="ollama",
@@ -115,7 +122,7 @@ def get(name: str) -> Provider:
 def guess_provider(model: str | None) -> str:
     """按模型名反查它属于哪家；查不到就用默认的。
 
-    这样 `--model deepseek-chat` 能自己找到端点，不用每次都写 --provider。
+    这样 `--model deepseek-flash` 能自己找到端点，不用每次都写 --provider。
     """
     if model:
         for provider in PROVIDERS.values():

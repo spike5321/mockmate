@@ -7,25 +7,43 @@ import json
 import streamlit as st
 
 from agent.live import LiveInterview, render_markdown
-from agent.llm import DEFAULT_MODEL, LLMError
-from agent.providers import ProviderError
+from agent.llm import LLMError
+from agent.providers import PROVIDERS, ProviderError
 from agent.resume import parse_resume, validate_resume_text
 
 st.set_page_config(page_title="MockMate · AI 应用开发模拟面试", layout="centered")
+
+PROVIDER_LABELS = {
+    "zhipu": "智谱 GLM",
+    "deepseek": "DeepSeek",
+    "qwen": "阿里云百炼 Qwen",
+    "ollama": "本机 Ollama",
+}
+
+
+def clear_credentials() -> None:
+    for provider in PROVIDER_LABELS:
+        st.session_state.pop(f"live_key_{provider}", None)
 
 
 def clear_session() -> None:
     session = st.session_state.pop("live_session", None)
     if session is not None:
         session.clear()
-    for key in ("resume_preview", "resume_paste", "jd_input", "live_key", "answer_input"):
+    for key in ("resume_preview", "resume_paste", "jd_input", "answer_input"):
         st.session_state.pop(key, None)
+    clear_credentials()
     st.session_state["upload_epoch"] = st.session_state.get("upload_epoch", 0) + 1
 
 
 def show_error(exc: Exception) -> None:
     if isinstance(exc, LLMError):
-        st.error(f"模型调用失败（{exc.kind}）。请检查 Key、模型和额度，再重试。")
+        if exc.kind == "rate_limit":
+            st.error("模型服务商限流或额度已用尽。请查看该账户的用量，稍后重试或切换供应商。")
+        elif exc.kind == "auth":
+            st.error("模型服务商鉴权失败。请确认 Key 属于所选供应商，且仍然有效。")
+        else:
+            st.error(f"模型调用失败（{exc.kind}）。请检查模型和网络后重试。")
     elif isinstance(exc, ValueError):
         st.error(str(exc))
     elif isinstance(exc, ProviderError):
@@ -63,20 +81,33 @@ if session is None:
         st.text_area("解析结果（请检查并修正）", key="resume_preview", height=220)
         st.subheader("2 · 岗位与模型")
         st.text_area("目标岗位 JD（AI 应用开发）", key="jd_input", height=150)
-        model = st.text_input("面试模型", value=DEFAULT_MODEL)
-        api_key = st.text_input("你的模型 API Key", type="password", key="live_key")
+        options = ["zhipu", "deepseek", "qwen"]
+        if not st.session_state.get("_mockmate_public_mode", False):
+            options.append("ollama")
+        provider = st.selectbox("模型服务商", options, format_func=lambda item: PROVIDER_LABELS[item])
+        models = PROVIDERS[provider].models
+        if provider == "deepseek":
+            models = ("deepseek-flash",)  # 旧的 deepseek-chat 只留作历史兼容
+        model = st.selectbox("面试模型", models, key=f"live_model_{provider}")
+        if provider == "ollama":
+            api_key = ""
+            st.caption("仅本机可用：先启动 Ollama 并下载所选模型；无需 API Key。")
+        else:
+            api_key = st.text_input("你的模型 API Key", type="password", key=f"live_key_{provider}")
+            st.caption(f"请使用 {PROVIDER_LABELS[provider]} 的 API Key；不同服务商的 Key 不能通用。")
+        st.caption("合成样例一场约 12 次模型调用；实际用量因模型和回答而异，报告会显示 token 用量。")
         if st.button("开始面试", type="primary"):
             try:
                 session = LiveInterview.create(
                     st.session_state["resume_preview"], st.session_state.get("jd_input", ""),
-                    api_key, model=model,
+                    api_key, model=model, provider=provider,
                 )
                 session.advance()
                 st.session_state["live_session"] = session
                 st.session_state.pop("resume_preview", None)
                 st.session_state.pop("resume_paste", None)
                 st.session_state.pop("jd_input", None)
-                st.session_state.pop("live_key", None)
+                clear_credentials()
                 st.rerun()
             except Exception as exc:
                 if session is not None:
@@ -86,6 +117,15 @@ else:
     if st.button("清除本次数据"):
         clear_session()
         st.rerun()
+
+    judge = getattr(session.evaluator, "llm", None)
+    calls = getattr(session.interviewer, "total_calls", 0) + getattr(judge, "total_calls", 0)
+    prompt_tokens = getattr(session.interviewer, "total_prompt_tokens", 0) + getattr(judge, "total_prompt_tokens", 0)
+    completion_tokens = getattr(session.interviewer, "total_completion_tokens", 0) + getattr(judge, "total_completion_tokens", 0)
+    st.caption(
+        f"本场已调用模型 {calls} 次；输入 {prompt_tokens}、输出 {completion_tokens} tokens。"
+        "服务商按其实际规则计费。"
+    )
 
     if session.phase == "awaiting":
         pending = session.pending_question()

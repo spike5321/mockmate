@@ -14,7 +14,7 @@ pip install -r requirements.txt
 streamlit run live_app.py
 ```
 
-在页面上传 PDF / DOCX / TXT 简历（或粘贴文本），确认解析结果，粘贴目标 JD，填入自己的模型 API Key，然后逐题回答。系统围绕**项目经历、RAG、Agent 与工具调用、评测与工程实践、行为沟通**各问一题，每题最多追问两次、整场最多追问两次；结束后可下载 Markdown 和 JSON 报告。评分只使用程序保存的候选人原话，总分由逐题分计算。简历、回答和 Key 只在当前会话内存中保存；可随时点击“清除本次数据”。会话失效后下一次访问会清除数据，不提供历史回顾；所用模型服务商仍按其自身政策处理请求。
+在页面上传 PDF / DOCX / TXT 简历（或粘贴文本），确认解析结果，粘贴目标 JD，选择智谱 / DeepSeek / 阿里云百炼和对应模型，填入该服务商的临时 API Key，然后逐题回答。本机直接运行 `live_app.py` 还可选无需 Key 的 Ollama（需自行安装并启动）。系统围绕**项目经历、RAG、Agent 与工具调用、评测与工程实践、行为沟通**各问一题，每题最多追问两次、整场最多追问两次；结束后可下载 Markdown 和 JSON 报告。评分只使用程序保存的候选人原话，总分由逐题分计算。简历、回答和 Key 只在当前会话内存中保存；可随时点击“清除本次数据”。会话失效后下一次访问会清除数据，不提供历史回顾；所用模型服务商仍按其自身政策处理请求。
 
 公开部署入口是 `public/app.py`，它有独立的轻量依赖清单。**当前仓库提供部署配置，公开体验链接尚待上线验证。** 真人面试用自己的 Key；原来的 `app.py` 和 `orchestrator.py` 仍是固定场景、脚本候选人的可复现演示。真人面试与原演示的架构和验收说明见 [真人面试说明](docs/live-interview.md)；三份合成简历的真实模型基线及局限见 [评测记录](docs/evaluation-results.md)。
 
@@ -316,7 +316,7 @@ python e2e_test.py     # 离线跑一遍工具链路，不调模型、不消耗�
 ### 跑测试
 
 ```bash
-python -m pytest tests -v     # 300 项，离线，不需要 API Key
+python -m pytest tests -v     # 311 项，离线，不需要 API Key
 ```
 
 单测只覆盖**确定性**的部分——也就是"能被机器判定对错"的那些：
@@ -356,7 +356,7 @@ python -m pytest tests -v     # 300 项，离线，不需要 API Key
 | 参数 | 作用 |
 |---|---|
 | `--scenario` | 场景 ID，目前有 `backend_intern` |
-| `--provider` | 供应商 `zhipu` / `deepseek` / `ollama`。默认**按模型名自动判断**，一般不用给 |
+| `--provider` | 供应商 `zhipu` / `deepseek` / `qwen` / `ollama`。默认**按模型名自动判断**，一般不用给 |
 | `--model` | 面试官模型，默认取 `.env` 里的 `CHAT_MODEL` |
 | `--score-model` | 评分模型，默认与面试官相同。可用来错开限流，或换更强的模型判分 |
 | `--no-llm-score` | 用规则打分替代 LLM 评分，调试流程时省额度 |
@@ -585,7 +585,7 @@ AgentTeams 配置和 HTTP mock 工具网关。那时候决策循环跑在别人�
 - [x] **阶段 4** 门面
   - [x] README 重写 + mermaid 架构图 + 实测数据（取自 `traces/`，可审计）
   - [x] `docs/architecture.md` 重写为可上手版本
-  - [x] pytest 单测（离线、不花额度）—— 现在 300 项
+  - [x] pytest 单测（离线、不花额度）—— 现在 311 项
   - [x] **运行回放页**（`docs/replay/`，单文件静态 HTML，由轨迹生成）+ GitHub Pages
   - [x] 旧目录归档到 `legacy/`、`.mailmap` 统一贡献者身份
   - [x] **本地 embedding 兜底**：不填 Key 也能建库、能检索（免 Key 免网络）

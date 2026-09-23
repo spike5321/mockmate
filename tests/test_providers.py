@@ -17,6 +17,7 @@ from agent.providers import ProviderError
 _ENV_KEYS = (
     "ZHIPU_API_KEY",
     "DEEPSEEK_API_KEY",
+    "DASHSCOPE_API_KEY",
     "OLLAMA_API_KEY",
     "LLM_BASE_URL",
     "LLM_API_KEY",
@@ -63,6 +64,15 @@ def test_model_name_guesses_the_provider(monkeypatch):
     ep = providers.resolve(model="deepseek-chat")
     assert ep.provider == "deepseek"
     assert ep.base_url == "https://api.deepseek.com/v1"
+
+
+def test_current_deepseek_and_qwen_models_select_their_own_endpoints(monkeypatch):
+    flash = providers.resolve(model="deepseek-flash", api_key="deepseek-test")
+    assert flash.provider == "deepseek"
+    assert flash.base_url == "https://api.deepseek.com/v1"
+    qwen = providers.resolve(model="qwen3.5-flash", api_key="qwen-test")
+    assert qwen.provider == "qwen"
+    assert qwen.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 def test_explicit_provider_wins_over_guessing(monkeypatch):

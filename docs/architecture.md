@@ -39,7 +39,7 @@ flowchart TB
         REND["tools/mock_tools.py · 报告渲染"]
     end
     subgraph L4["外部依赖"]
-        VENDOR["任意 OpenAI 兼容端点<br/>智谱 / DeepSeek / 本地 ollama<br/>chat/completions · embeddings"]
+        VENDOR["任意 OpenAI 兼容端点<br/>智谱 / DeepSeek / 百炼 Qwen / 本地 Ollama<br/>chat/completions · embeddings"]
         CHROMA["Chroma 持久化向量库<br/>.kb/"]
     end
     MAIN --> LLM
@@ -370,7 +370,7 @@ docs/examples/run14_report.json ─┘
 ### 改完怎么验证
 
 ```bash
-python -m pytest tests -v     # 300 项，离线，不需要 API Key
+python -m pytest tests -v     # 311 项，离线，不需要 API Key
 python e2e_test.py           # 工具链路端到端自检（也不调模型）
 ```
 

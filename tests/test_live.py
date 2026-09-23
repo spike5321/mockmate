@@ -63,6 +63,86 @@ def session(**kwargs):
     return LiveInterview("项目甲：做过一个 RAG 系统", "AI 应用开发，负责 RAG 和 Agent", interviewer, evaluator)
 
 
+@pytest.mark.parametrize("provider,model,endpoint", [
+    ("zhipu", "glm-4.5-flash", "https://open.bigmodel.cn/api/paas/v4"),
+    ("deepseek", "deepseek-flash", "https://api.deepseek.com/v1"),
+    ("qwen", "qwen3.5-flash", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    ("ollama", "qwen2.5:7b", "http://localhost:11434/v1"),
+])
+def test_live_provider_pins_endpoint_and_never_leaks_cloud_key_to_local(
+    monkeypatch, provider, model, endpoint,
+):
+    monkeypatch.setenv("LLM_BASE_URL", "https://wrong.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "server-key")
+    live = LiveInterview.create(
+        "项目甲：做过 RAG 系统", "AI 应用开发岗位", "visitor-key", model=model, provider=provider,
+    )
+    assert live.interviewer.base_url == endpoint
+    assert live.evaluator.llm.base_url == endpoint
+    expected = "local-no-key-needed" if provider == "ollama" else "visitor-key"
+    assert live.interviewer.api_key == expected
+    assert live.evaluator.llm.api_key == expected
+    live.clear()
+
+
+def test_live_local_model_does_not_require_a_key():
+    live = LiveInterview.create(
+        "项目甲：做过 RAG 系统", "AI 应用开发岗位", "", model="qwen2.5:7b", provider="ollama",
+    )
+    assert live.interviewer.api_key == "local-no-key-needed"
+
+
+def test_live_rejects_mismatched_provider_and_model():
+    with pytest.raises(ValueError, match="不属于该供应商"):
+        LiveInterview.create(
+            "项目甲：做过 RAG 系统", "AI 应用开发岗位", "visitor-key",
+            model="glm-4.5-flash", provider="deepseek",
+        )
+
+
+@pytest.mark.parametrize("provider,model,endpoint", [
+    ("deepseek", "deepseek-flash", "https://api.deepseek.com/v1"),
+    ("qwen", "qwen3.5-flash", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+])
+def test_live_cloud_question_uses_selected_endpoint_and_tool_schema(
+    monkeypatch, provider, model, endpoint,
+):
+    captured = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": None, "tool_calls": [{
+                    "id": "call-1", "type": "function", "function": {
+                        "name": "ask_candidate",
+                        "arguments": json.dumps({
+                            "question": "请结合项目甲说明具体设计和技术取舍？", "focus": "设计取舍",
+                        }),
+                    },
+                }]}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 4},
+            }
+
+    def fake_post(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setattr("agent.llm.requests.post", fake_post)
+    live = LiveInterview.create(
+        "项目甲：做过 RAG 系统", "AI 应用开发岗位", "visitor-key",
+        model=model, provider=provider,
+    )
+    pending = live.advance()
+    assert pending["question"] == "请结合项目甲说明具体设计和技术取舍？"
+    assert captured["url"] == endpoint + "/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer visitor-key"
+    assert captured["json"]["model"] == model
+    assert captured["json"]["tools"][0]["function"]["name"] == "ask_candidate"
+    live.clear()
+
+
 def test_five_competencies_generate_a_reproducible_report():
     live = session()
     pending = live.advance()

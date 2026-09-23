@@ -47,8 +47,9 @@ def test_start_and_submit_answer_through_page(monkeypatch):
         def score(self, question, answer):
             return {"score": 7, "dimensions": {}, "comment": "具体", "evidence": [], "source": "llm"}
 
-    def create(cls, resume, jd, api_key, model):
+    def create(cls, resume, jd, api_key, model, provider):
         assert resume == "项目甲：RAG 系统" and jd == "AI 应用开发岗位" and api_key == "test-key"
+        assert model == "glm-4.5-flash" and provider == "zhipu"
         return LiveInterview(resume, jd, FakeLLM(), FakeEvaluator())
 
     monkeypatch.setattr(LiveInterview, "create", classmethod(create))
@@ -69,3 +70,46 @@ def test_start_and_submit_answer_through_page(monkeypatch):
     assert not app.exception, [str(e.value) for e in app.exception]
     assert "live_session" not in app.session_state
     assert app.session_state["upload_epoch"] == 1
+
+
+def test_public_provider_switch_uses_its_own_key_and_model(monkeypatch):
+    captured = {}
+
+    def create(cls, resume, jd, api_key, model, provider):
+        captured.update(api_key=api_key, model=model, provider=provider)
+        raise ValueError("stopped before network")
+
+    monkeypatch.setattr(LiveInterview, "create", classmethod(create))
+    entry = Path(__file__).resolve().parents[1] / "public" / "app.py"
+    app = AppTest.from_file(str(entry), default_timeout=30).run()
+    next(w for w in app.text_area if w.label == "或者粘贴简历文字").set_value("项目甲：RAG 系统").run()
+    next(w for w in app.button if w.label == "解析并预览简历").click().run()
+    assert "本机 Ollama" not in next(w for w in app.selectbox if w.label == "模型服务商").options
+    next(w for w in app.text_area if w.label == "目标岗位 JD（AI 应用开发）").set_value("AI 应用开发岗位").run()
+    next(w for w in app.text_input if w.label == "你的模型 API Key").set_value("zhipu-key").run()
+    next(w for w in app.selectbox if w.label == "模型服务商").set_value("阿里云百炼 Qwen").run()
+    assert next(w for w in app.text_input if w.label == "你的模型 API Key").value == ""
+    next(w for w in app.text_input if w.label == "你的模型 API Key").set_value("qwen-key").run()
+    next(w for w in app.button if w.label == "开始面试").click().run()
+    assert captured == {"api_key": "qwen-key", "model": "qwen3.5-flash", "provider": "qwen"}
+    assert not app.exception
+
+
+def test_local_ui_offers_keyless_ollama(monkeypatch):
+    captured = {}
+
+    def create(cls, resume, jd, api_key, model, provider):
+        captured.update(api_key=api_key, model=model, provider=provider)
+        raise ValueError("stopped before network")
+
+    monkeypatch.setattr(LiveInterview, "create", classmethod(create))
+    entry = Path(__file__).resolve().parents[1] / "live_app.py"
+    app = AppTest.from_file(str(entry), default_timeout=30).run()
+    next(w for w in app.text_area if w.label == "或者粘贴简历文字").set_value("项目甲：RAG 系统").run()
+    next(w for w in app.button if w.label == "解析并预览简历").click().run()
+    next(w for w in app.text_area if w.label == "目标岗位 JD（AI 应用开发）").set_value("AI 应用开发岗位").run()
+    next(w for w in app.selectbox if w.label == "模型服务商").set_value("本机 Ollama").run()
+    assert not any(w.label == "你的模型 API Key" for w in app.text_input)
+    next(w for w in app.button if w.label == "开始面试").click().run()
+    assert captured == {"api_key": "", "model": "qwen2.5:7b", "provider": "ollama"}
+    assert not app.exception

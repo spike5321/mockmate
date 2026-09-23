@@ -7,6 +7,7 @@ The original CLI simulator remains in orchestrator.py.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from uuid import uuid4
 
 from agent.evaluator import AnswerEvaluator
 from agent.llm import DEFAULT_MODEL, LLMClient
+from agent.providers import ENV_PROVIDER, get, guess_provider
 from agent.resume import validate_resume_text
 
 MAX_JD_CHARS = 12_000
@@ -122,15 +124,23 @@ class LiveInterview:
         jd = jd.strip()
         if not jd or len(jd) > MAX_JD_CHARS:
             raise ValueError("请填写目标岗位 JD，长度不超过 12000 字。")
-        if not api_key.strip():
+        selected = get(provider or os.environ.get(ENV_PROVIDER) or guess_provider(model))
+        if provider is not None and model not in selected.models:
+            raise ValueError("所选模型不属于该供应商，请重新选择模型。")
+        if not selected.key_optional and not api_key.strip():
             raise ValueError("请填写模型 API Key；它只保留在本次会话内存中。")
+        # Never forward a cloud key (or a server environment key) to a local
+        # Ollama process. Pin the endpoint to the selected provider so a global
+        # LLM_BASE_URL override cannot silently redirect a visitor's key.
+        credential = "local-no-key-needed" if selected.key_optional else api_key.strip()
+        client_args = dict(model=model, provider=selected.name,
+                           base_url=selected.base_url if provider is not None else None,
+                           api_key=credential, verbose=False, max_retries=2, timeout=45)
         interviewer = LLMClient.from_provider(
-            model=model, provider=provider, api_key=api_key.strip(), verbose=False,
-            max_retries=2, timeout=45,
+            **client_args,
         )
         judge = LLMClient.from_provider(
-            model=model, provider=provider, api_key=api_key.strip(), verbose=False,
-            max_retries=2, timeout=45,
+            **client_args,
         )
         return cls(resume, jd, interviewer, AnswerEvaluator(judge, verbose=False, scenario_id="live"))
 
